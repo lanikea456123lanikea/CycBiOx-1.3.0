@@ -1,0 +1,30 @@
+# Gradle
+.gradle/
+build/
+bin/
+target/
+
+# Java
+*.class
+*.jar
+*.war
+*.ear
+*.zip
+*.tar
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# NetBeans cache
+nb-cache/

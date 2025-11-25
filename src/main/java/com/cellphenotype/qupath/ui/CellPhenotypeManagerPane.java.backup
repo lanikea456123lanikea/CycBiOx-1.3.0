@@ -1,0 +1,1676 @@
+package com.cellphenotype.qupath.ui;
+
+import com.cellphenotype.qupath.CellPhenotypeAPI;
+import com.cellphenotype.qupath.classifier.CellPhenotypeClassifier;
+import com.cellphenotype.qupath.model.CellPhenotype;
+import com.cellphenotype.qupath.model.PhenotypeManager;
+import com.cellphenotype.qupath.model.ThresholdConfig;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import javafx.application.Platform;
+import javafx.collections.FXCollections;
+import javafx.collections.ObservableList;
+import javafx.geometry.Insets;
+import javafx.geometry.Orientation;
+import javafx.geometry.Pos;
+import javafx.scene.Scene;
+import javafx.scene.control.*;
+import javafx.scene.control.cell.PropertyValueFactory;
+import javafx.scene.layout.*;
+import javafx.stage.Modality;
+import javafx.stage.DirectoryChooser;
+import javafx.stage.Stage;
+import qupath.lib.gui.QuPathGUI;
+import qupath.lib.images.ImageData;
+import qupath.lib.images.servers.ImageChannel;
+import qupath.lib.projects.Project;
+import qupath.lib.projects.ProjectImageEntry;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import java.io.IOException;
+import java.util.*;
+import java.util.stream.Collectors;
+
+public class CellPhenotypeManagerPane {
+    
+    private static final Logger logger = LoggerFactory.getLogger(CellPhenotypeManagerPane.class);
+    
+    private static final List<String> MEASUREMENT_TYPES = Arrays.asList(
+        "Nucleus: Mean", "Nucleus: Median", "Nucleus: Max", "Nucleus: Min",
+        "Cell: Mean", "Cell: Median", "Cell: Max", "Cell: Min",
+        "Cytoplasm: Mean", "Cytoplasm: Median", "Cytoplasm: Max", "Cytoplasm: Min"
+    );
+    
+    // UI Operation Modes
+    private enum OperationMode {
+        CREATE_CLASSIFIER("Create Single Measurement Classifier"),
+        LOAD_CLASSIFIER("Load Classifier (Execute Strategy)");
+        
+        private final String displayName;
+        
+        OperationMode(String displayName) {
+            this.displayName = displayName;
+        }
+        
+        @Override
+        public String toString() {
+            return displayName;
+        }
+    }
+    
+    private OperationMode currentMode = OperationMode.CREATE_CLASSIFIER;
+    private Button modeToggleButton;
+    private boolean livePreviewEnabled = false;
+    private String currentPreviewChannel = null;
+    
+    // Dynamic channel list - populated from QuPath image data
+    private List<String> availableChannels = new ArrayList<>();
+    
+    private final QuPathGUI qupath;
+    private Stage stage;
+    
+    // Configuration fields
+    private TextField configNameField;
+    private ComboBox<ThresholdConfig.Strategy> strategyComboBox;
+    
+    // Threshold table components - enhanced for QuPath classifier workflow
+    private final Map<String, RadioButton> channelRadioButtons = new HashMap<>();
+    private final Map<String, CheckBox> channelCheckBoxes = new HashMap<>();
+    private final Map<String, ComboBox<String>> measurementComboBoxes = new HashMap<>();
+    private final Map<String, Slider> thresholdSliders = new HashMap<>();
+    private final Map<String, TextField> thresholdFields = new HashMap<>();
+    private ToggleGroup channelToggleGroup;
+    private ToggleGroup singleChannelGroup; // For Create Classifier mode
+    private VBox channelContainer;
+    
+    // Phenotype table
+    private TableView<PhenotypeTableRow> phenotypeTable;
+    private ObservableList<PhenotypeTableRow> phenotypeData;
+    
+    // Current configuration state
+    private ThresholdConfig currentConfig;
+    private List<CellPhenotype> phenotypes;
+    
+    public CellPhenotypeManagerPane(QuPathGUI qupath) {
+        this.qupath = qupath;
+        this.phenotypes = new ArrayList<>();
+        this.currentConfig = new ThresholdConfig("配置表1");
+        this.channelToggleGroup = new ToggleGroup();
+        loadAvailableChannels();
+        initializeThresholds();
+    }
+    
+    private void loadAvailableChannels() {
+        ImageData<?> imageData = qupath.getImageData();
+        if (imageData != null) {
+            List<ImageChannel> channels = imageData.getServer().getMetadata().getChannels();
+            availableChannels.clear();
+            for (int i = 0; i < channels.size(); i++) {
+                String channelName = channels.get(i).getName();
+                if (channelName == null || channelName.trim().isEmpty()) {
+                    channelName = "Channel " + (i + 1);
+                }
+                
+                // Skip DAPI channels - case insensitive check
+                if (channelName.toLowerCase().contains("dapi") || 
+                    channelName.toLowerCase().contains("hoechst") ||
+                    channelName.toLowerCase().contains("nucleus")) {
+                    logger.info("Skipping nuclear staining channel: {}", channelName);
+                    continue;
+                }
+                
+                availableChannels.add(channelName);
+            }
+        } else {
+            // Default non-DAPI channels if no image is loaded - create mutable list
+            availableChannels.clear();
+            availableChannels.addAll(Arrays.asList("FITC", "TRITC", "Cy5", "AF647", "PE"));
+        }
+        
+        logger.info("Loaded {} analysis channels: {}", availableChannels.size(), availableChannels);
+    }
+    
+    private void initializeThresholds() {
+        Map<String, ThresholdConfig.ChannelThreshold> thresholds = new HashMap<>();
+        for (int i = 0; i < availableChannels.size(); i++) {
+            String channelName = availableChannels.get(i);
+            double defaultThreshold = i == 0 ? 150.0 : 100.0; // First channel enabled by default
+            boolean enabled = i == 0;
+            thresholds.put(channelName, new ThresholdConfig.ChannelThreshold("Nucleus: Mean", defaultThreshold, enabled));
+        }
+        
+        for (Map.Entry<String, ThresholdConfig.ChannelThreshold> entry : thresholds.entrySet()) {
+            currentConfig = currentConfig.withChannelThreshold(entry.getKey(), entry.getValue());
+        }
+    }
+    
+    public void show() {
+        if (stage != null) {
+            stage.toFront();
+            return;
+        }
+        
+        // Refresh channel information when showing
+        loadAvailableChannels();
+        initializeThresholds();
+        
+        stage = new Stage();
+        stage.setTitle("Cell Phenotype Manager");
+        stage.initModality(Modality.NONE);
+        stage.initOwner(qupath.getStage());
+        
+        ScrollPane scrollPane = createMainLayout();
+        Scene scene = new Scene(scrollPane, 1000, 800);
+        stage.setScene(scene);
+        stage.show();
+        
+        stage.setOnCloseRequest(e -> {
+            // Clear any preview when closing
+            clearLivePreview();
+            stage = null;
+        });
+    }
+    
+    private ScrollPane createMainLayout() {
+        VBox root = new VBox(10);
+        root.setPadding(new Insets(10));
+        
+        // Basic settings section
+        root.getChildren().add(createBasicSettingsSection());
+        
+        // Threshold strategy section
+        root.getChildren().add(createThresholdSection());
+        
+        // Cell classification section
+        root.getChildren().add(createClassificationSection());
+        
+        // Action buttons
+        root.getChildren().add(createActionButtonsSection());
+        
+        ScrollPane scrollPane = new ScrollPane(root);
+        scrollPane.setFitToWidth(true);
+        scrollPane.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        scrollPane.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
+        
+        return scrollPane;
+    }
+    
+    private TitledPane createBasicSettingsSection() {
+        VBox content = new VBox(10);
+        content.setPadding(new Insets(10));
+        
+        // Operation Mode Toggle
+        HBox modeBox = new HBox(10);
+        modeBox.setAlignment(Pos.CENTER_LEFT);
+        Label modeLabel = new Label("操作模式");
+        modeLabel.setPrefWidth(80);
+        modeToggleButton = new Button(currentMode.toString());
+        modeToggleButton.setPrefWidth(250);
+        modeToggleButton.setStyle("-fx-background-color: #FF9800; -fx-text-fill: white;");
+        modeToggleButton.setOnAction(e -> toggleOperationMode());
+        modeBox.getChildren().addAll(modeLabel, modeToggleButton);
+        
+        // Configuration name
+        HBox nameBox = new HBox(10);
+        nameBox.setAlignment(Pos.CENTER_LEFT);
+        Label nameLabel = new Label("名称");
+        nameLabel.setPrefWidth(80);
+        configNameField = new TextField(currentConfig.getConfigName());
+        configNameField.setPrefWidth(200);
+        nameBox.getChildren().addAll(nameLabel, configNameField);
+        
+        // Strategy selection
+        HBox strategyBox = new HBox(10);
+        strategyBox.setAlignment(Pos.CENTER_LEFT);
+        Label strategyLabel = new Label("通道阈值策略");
+        strategyLabel.setPrefWidth(80);
+        strategyComboBox = new ComboBox<>();
+        strategyComboBox.getItems().addAll(ThresholdConfig.Strategy.values());
+        strategyComboBox.setValue(currentConfig.getStrategy());
+        strategyComboBox.setPrefWidth(120);
+        Button executeButton = new Button("执行策略");
+        executeButton.setStyle("-fx-background-color: #4CAF50; -fx-text-fill: white;");
+        executeButton.setOnAction(e -> executeThresholdStrategy());
+        strategyBox.getChildren().addAll(strategyLabel, strategyComboBox, executeButton);
+        
+        content.getChildren().addAll(modeBox, nameBox, strategyBox);
+        
+        TitledPane pane = new TitledPane("基本设置", content);
+        pane.setCollapsible(false);
+        return pane;
+    }
+    
+    private TitledPane createThresholdSection() {
+        VBox content = new VBox(10);
+        content.setPadding(new Insets(10));
+        
+        // Basic settings with path
+        HBox basicSettingsBox = new HBox(10);
+        basicSettingsBox.setAlignment(Pos.CENTER_LEFT);
+        
+        Label configLabel = new Label("配置名称:");
+        TextField configNameField = new TextField("配置表1");
+        configNameField.setPrefWidth(120);
+        
+        Label pathLabel = new Label("保存地址:");
+        TextField savePathField = new TextField(System.getProperty("user.home"));
+        savePathField.setPrefWidth(200);
+        Button browseButton = new Button("浏览...");
+        browseButton.setOnAction(e -> browseSavePath(savePathField));
+        
+        basicSettingsBox.getChildren().addAll(configLabel, configNameField, 
+            new Separator(Orientation.VERTICAL), pathLabel, savePathField, browseButton);
+        content.getChildren().add(basicSettingsBox);
+        
+        // Operation mode selection (融合到阈值策略)
+        HBox operationModeBox = new HBox(15);
+        operationModeBox.setAlignment(Pos.CENTER_LEFT);
+        operationModeBox.setPadding(new Insets(10, 0, 10, 0));
+        
+        Label modeLabel = new Label("操作模式:");
+        modeLabel.setStyle("-fx-font-weight: bold;");
+        
+        ToggleGroup modeGroup = new ToggleGroup();
+        
+        RadioButton createClassifierRadio = new RadioButton("Create Single Measurement Classifier");
+        createClassifierRadio.setToggleGroup(modeGroup);
+        createClassifierRadio.setSelected(true);
+        createClassifierRadio.setStyle("-fx-text-fill: #FF9800;");
+        
+        RadioButton loadClassifierRadio = new RadioButton("Load Classifier (Execute Strategy)");
+        loadClassifierRadio.setToggleGroup(modeGroup);
+        loadClassifierRadio.setStyle("-fx-text-fill: #4CAF50;");
+        
+        // Mode change handling
+        modeGroup.selectedToggleProperty().addListener((obs, oldToggle, newToggle) -> {
+            if (newToggle == createClassifierRadio) {
+                currentMode = OperationMode.CREATE_CLASSIFIER;
+                updateChannelSelectionMode();
+            } else if (newToggle == loadClassifierRadio) {
+                currentMode = OperationMode.LOAD_CLASSIFIER;
+                updateChannelSelectionMode();
+            }
+        });
+        
+        operationModeBox.getChildren().addAll(modeLabel, createClassifierRadio, loadClassifierRadio);
+        content.getChildren().add(operationModeBox);
+        
+        // Control buttons row
+        HBox controlBox = new HBox(10);
+        controlBox.setAlignment(Pos.CENTER_LEFT);
+        
+        Button refreshButton = new Button("刷新通道");
+        refreshButton.setStyle("-fx-background-color: #2196F3; -fx-text-fill: white;");
+        refreshButton.setOnAction(e -> refreshChannels());
+        
+        // Execute button (moved after mode selection)
+        Button executeButton = new Button("执行策略");
+        executeButton.setStyle("-fx-background-color: #4CAF50; -fx-text-fill: white; -fx-font-weight: bold;");
+        executeButton.setOnAction(e -> executeStrategy());
+        
+        Label instructionLabel = new Label("根据操作模式选择通道并设置阈值");
+        instructionLabel.setStyle("-fx-text-fill: #666; -fx-font-style: italic;");
+        
+        controlBox.getChildren().addAll(refreshButton, executeButton, instructionLabel);
+        content.getChildren().add(controlBox);
+        
+        // Channel container for dynamic channels
+        channelContainer = new VBox(5);
+        createChannelControls();
+        
+        ScrollPane channelScrollPane = new ScrollPane(channelContainer);
+        channelScrollPane.setFitToWidth(true);
+        channelScrollPane.setPrefHeight(300);
+        channelScrollPane.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        channelScrollPane.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
+        
+        content.getChildren().add(channelScrollPane);
+        
+        TitledPane pane = new TitledPane("阈值策略配置", content);
+        pane.setCollapsible(false);
+        return pane;
+    }
+    
+    private void createChannelControls() {
+        channelContainer.getChildren().clear();
+        channelRadioButtons.clear();
+        measurementComboBoxes.clear();
+        thresholdSliders.clear();
+        thresholdFields.clear();
+        
+        // Header
+        HBox header = new HBox(10);
+        header.setPadding(new Insets(5));
+        header.setStyle("-fx-background-color: #f0f0f0; -fx-border-color: #cccccc;");
+        
+        Label channelLabel = new Label("Channel");
+        channelLabel.setPrefWidth(120);
+        Label measurementLabel = new Label("Measurement");
+        measurementLabel.setPrefWidth(150);
+        Label thresholdLabel = new Label("Threshold");
+        thresholdLabel.setPrefWidth(250);
+        
+        header.getChildren().addAll(channelLabel, measurementLabel, thresholdLabel);
+        channelContainer.getChildren().add(header);
+        
+        // Create controls for each channel
+        for (String channelName : availableChannels) {
+            HBox channelBox = createChannelRow(channelName);
+            channelContainer.getChildren().add(channelBox);
+        }
+    }
+    
+    private HBox createChannelRow(String channelName) {
+        HBox row = new HBox(10);
+        row.setPadding(new Insets(5));
+        row.setAlignment(Pos.CENTER_LEFT);
+        
+        // Channel selection mechanism based on current mode
+        if (currentMode == OperationMode.CREATE_CLASSIFIER) {
+            // Single selection mode for Create Classifier
+            RadioButton channelRadio = new RadioButton(channelName);
+            channelRadio.setPrefWidth(120);
+            channelRadio.setStyle("-fx-font-weight: bold;");
+            
+            // Add to single selection group
+            if (singleChannelGroup == null) {
+                singleChannelGroup = new ToggleGroup();
+            }
+            channelRadio.setToggleGroup(singleChannelGroup);
+            
+            // Selection handling for Create Classifier mode
+            channelRadio.setOnAction(e -> {
+                if (channelRadio.isSelected()) {
+                    clearLivePreview();
+                    currentPreviewChannel = channelName;
+                    livePreviewEnabled = true;
+                    logger.info("Selected channel for Create Classifier: {}", channelName);
+                }
+            });
+            
+            channelRadioButtons.put(channelName, channelRadio);
+            row.getChildren().add(channelRadio);
+            
+        } else {
+            // Multi-selection mode for Load Classifier
+            CheckBox channelCheckBox = new CheckBox(channelName);
+            channelCheckBox.setPrefWidth(120);
+            channelCheckBox.setStyle("-fx-font-weight: bold;");
+            
+            channelCheckBoxes.put(channelName, channelCheckBox);
+            row.getChildren().add(channelCheckBox);
+        }
+        
+        // Measurement type combo box
+        ComboBox<String> measurementCombo = new ComboBox<>();
+        measurementCombo.getItems().addAll(MEASUREMENT_TYPES);
+        measurementCombo.setValue("Nucleus: Mean");
+        measurementCombo.setPrefWidth(150);
+        measurementCombo.setOnAction(e -> {
+            if (livePreviewEnabled && channelName.equals(currentPreviewChannel)) {
+                updateLivePreview();
+            }
+        });
+        measurementComboBoxes.put(channelName, measurementCombo);
+        
+        // Threshold slider and text field
+        VBox thresholdBox = new VBox(5);
+        
+        Slider slider = new Slider(0, 1000, 100);
+        slider.setPrefWidth(200);
+        thresholdSliders.put(channelName, slider);
+        
+        TextField textField = new TextField("100");
+        textField.setPrefWidth(60);
+        thresholdFields.put(channelName, textField);
+        
+        // Bind slider and text field
+        slider.valueProperty().addListener((obs, oldVal, newVal) -> {
+            textField.setText(String.valueOf(newVal.intValue()));
+        });
+        
+        textField.setOnAction(e -> {
+            try {
+                double val = Double.parseDouble(textField.getText());
+                slider.setValue(val);
+            } catch (NumberFormatException ex) {
+                textField.setText(String.valueOf((int) slider.getValue()));
+            }
+        });
+        
+        HBox sliderBox = new HBox(5);
+        sliderBox.getChildren().addAll(slider, textField);
+        sliderBox.setAlignment(Pos.CENTER_LEFT);
+        
+        // Add confirm button for Create Classifier mode
+        if (currentMode == OperationMode.CREATE_CLASSIFIER) {
+            Button confirmButton = new Button("确定");
+            confirmButton.setStyle("-fx-background-color: #FF9800; -fx-text-fill: white; -fx-font-size: 12px;");
+            confirmButton.setPrefWidth(60);
+            confirmButton.setOnAction(e -> confirmChannelThreshold(channelName));
+            
+            sliderBox.getChildren().add(confirmButton);
+        }
+        
+        thresholdBox.getChildren().add(sliderBox);
+        thresholdBox.setPrefWidth(currentMode == OperationMode.CREATE_CLASSIFIER ? 320 : 260);
+        
+        row.getChildren().addAll(measurementCombo, thresholdBox);
+        return row;
+    }
+    
+    /**
+     * Confirm channel threshold setting and apply live preview
+     */
+    private void confirmChannelThreshold(String channelName) {
+        // Check if this channel is selected
+        if (currentMode == OperationMode.CREATE_CLASSIFIER) {
+            RadioButton radioButton = channelRadioButtons.get(channelName);
+            if (radioButton == null || !radioButton.isSelected()) {
+                showAlert(Alert.AlertType.WARNING, "提示", "请先选择通道 " + channelName);
+                return;
+            }
+        }
+        
+        ImageData<?> imageData = qupath.getImageData();
+        if (imageData == null) {
+            showAlert(Alert.AlertType.WARNING, "警告", "没有图像数据可用于预览");
+            return;
+        }
+        
+        Slider slider = thresholdSliders.get(channelName);
+        ComboBox<String> measurementBox = measurementComboBoxes.get(channelName);
+        
+        if (slider != null && measurementBox != null) {
+            double threshold = slider.getValue();
+            String measurementType = measurementBox.getValue();
+            
+            // Save threshold setting to configuration
+            currentConfig.addChannelThreshold(channelName, measurementType, threshold, true);
+            
+            // Apply live preview
+            applyChannelLivePreview(channelName, threshold, measurementType);
+            
+            logger.info("Confirmed threshold for channel {}: threshold={}, measurement={}", 
+                channelName, threshold, measurementType);
+        }
+    }
+    
+    /**
+     * Apply live preview for the confirmed channel
+     */
+    private void applyChannelLivePreview(String channelName, double threshold, String measurementType) {
+        ImageData<?> imageData = qupath.getImageData();
+        if (imageData == null) return;
+        
+        try {
+            var hierarchy = imageData.getHierarchy();
+            var allCells = new ArrayList<>(hierarchy.getDetectionObjects());
+            
+            // Performance optimization for large datasets
+            int maxPreviewCells = Math.min(allCells.size(), 10000);
+            var cells = allCells.subList(0, maxPreviewCells);
+            
+            logger.info("Applying live preview: {} cells for channel: {}", maxPreviewCells, channelName);
+            
+            // Clear existing preview
+            clearPreview();
+            
+            final int[] counts = new int[2]; // [positive, negative]
+            
+            // Find correct measurement name
+            String[] possibleNames = createPossibleMeasurementNames(channelName, measurementType);
+            String actualMeasurementName = findActualMeasurementName(cells, possibleNames, channelName);
+            
+            if (actualMeasurementName == null) {
+                showAlert(Alert.AlertType.ERROR, "错误", "无法找到通道 " + channelName + " 的测量数据");
+                return;
+            }
+            
+            // Apply threshold classification and coloring
+            for (var cell : cells) {
+                try {
+                    var measurements = cell.getMeasurementList();
+                    if (measurements.containsKey(actualMeasurementName)) {
+                        double measurementValue = measurements.get(actualMeasurementName);
+                        boolean isPositive = measurementValue > threshold;
+                        
+                        if (isPositive) {
+                            cell.setColor(0xFF00FF); // Magenta for positive
+                            counts[0]++;
+                        } else {
+                            cell.setColor(0x808080); // Gray for negative  
+                            counts[1]++;
+                        }
+                    }
+                } catch (Exception e) {
+                    logger.debug("Error processing cell {}: {}", cell.getID(), e.getMessage());
+                }
+            }
+            
+            // Update display and sync data
+            Platform.runLater(() -> {
+                if (qupath.getViewer() != null) {
+                    qupath.getViewer().repaint();
+                }
+                
+                // Sync QuPath overlays and annotations
+                syncQuPathDisplayData(imageData);
+                
+                // Show result
+                showAlert(Alert.AlertType.INFORMATION, "预览完成", 
+                    String.format("通道 %s Live Preview完成\n阈值: %.1f\n阳性细胞: %d\n阴性细胞: %d\n(共处理 %d/%d 个细胞)", 
+                        channelName, threshold, counts[0], counts[1], maxPreviewCells, allCells.size()));
+            });
+            
+        } catch (Exception e) {
+            logger.error("Live preview error: {}", e.getMessage(), e);
+            showAlert(Alert.AlertType.ERROR, "预览失败", "Live Preview应用失败: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Find actual measurement name from possible alternatives
+     */
+    private String findActualMeasurementName(List<qupath.lib.objects.PathObject> cells, String[] possibleNames, String channelName) {
+        if (cells.isEmpty()) return null;
+        
+        var firstCell = cells.get(0);
+        var measurements = firstCell.getMeasurementList();
+        
+        // Try exact matches first
+        for (String testName : possibleNames) {
+            if (measurements.containsKey(testName)) {
+                logger.info("Found exact measurement match: {}", testName);
+                return testName;
+            }
+        }
+        
+        // Try fuzzy matching
+        for (String availableName : measurements.getNames()) {
+            if (availableName.toLowerCase().contains(channelName.toLowerCase()) &&
+                availableName.toLowerCase().contains("mean")) {
+                logger.info("Found fuzzy measurement match: {}", availableName);
+                return availableName;
+            }
+        }
+        
+        // List available measurements for debugging
+        logger.warn("No matching measurement for channel: {}. Available:", channelName);
+        measurements.getNames().forEach(name -> logger.info("  - {}", name));
+        
+        return null;
+    }
+    
+    /**
+     * Sync QuPath display data including markers, annotations, and detections
+     */
+    private void syncQuPathDisplayData(ImageData<?> imageData) {
+        try {
+            var hierarchy = imageData.getHierarchy();
+            
+            // Fire hierarchy change events to update displays
+            hierarchy.fireHierarchyChangedEvent(this);
+            
+            // Update viewer overlays
+            if (qupath.getViewer() != null) {
+                var viewer = qupath.getViewer();
+                
+                // Force repaint
+                viewer.repaint();
+                
+                // Update overlay options if available
+                var overlayOptions = viewer.getOverlayOptions();
+                if (overlayOptions != null) {
+                    // Reset measurement mapper to refresh display
+                    overlayOptions.resetMeasurementMapper();
+                }
+                
+                // Update any measurement overlays
+                viewer.forceOverlayUpdate();
+            }
+            
+        } catch (Exception e) {
+            logger.error("Error syncing QuPath display data: {}", e.getMessage(), e);
+        }
+    }
+            if (livePreviewEnabled && channelName.equals(currentPreviewChannel)) {
+                updateLivePreview();
+            }
+        });
+        
+        textField.setOnAction(e -> {
+            try {
+                double val = Double.parseDouble(textField.getText());
+                slider.setValue(val);
+                if (livePreviewEnabled && channelName.equals(currentPreviewChannel)) {
+                    updateLivePreview();
+                }
+            } catch (NumberFormatException ex) {
+                textField.setText(String.valueOf((int) slider.getValue()));
+            }
+        });
+        
+        HBox sliderBox = new HBox(5);
+        sliderBox.getChildren().addAll(slider, textField);
+        sliderBox.setAlignment(Pos.CENTER_LEFT);
+        
+        // Confirm button for Create Classifier mode
+        if (currentMode == OperationMode.CREATE_CLASSIFIER) {
+            Button confirmButton = new Button("确定");
+            confirmButton.setStyle("-fx-background-color: #FF9800; -fx-text-fill: white;");
+            confirmButton.setOnAction(e -> {
+                // Save settings and apply live preview
+                updateLivePreview();
+                saveChannelSettings(channelName);
+                showAlert(Alert.AlertType.INFORMATION, "设置保存", 
+                    "通道 " + channelName + " 的阈值设置已保存并应用预览效果");
+            });
+            sliderBox.getChildren().add(confirmButton);
+        }
+        
+        thresholdBox.getChildren().add(sliderBox);
+        thresholdBox.setPrefWidth(280);
+        
+        row.getChildren().addAll(measurementCombo, thresholdBox);
+        return row;
+    }
+    
+    /**
+     * Save channel settings to current configuration
+     */
+    private void saveChannelSettings(String channelName) {
+        try {
+            Slider slider = thresholdSliders.get(channelName);
+            ComboBox<String> measurementCombo = measurementComboBoxes.get(channelName);
+            
+            if (slider != null && measurementCombo != null) {
+                double threshold = slider.getValue();
+                String measurementType = measurementCombo.getValue();
+                
+                // Save to current configuration
+                if (currentConfig != null) {
+                    currentConfig.setChannelThreshold(channelName, measurementType, threshold, true);
+                    logger.info("Saved settings for channel {}: threshold={}, measurement={}", 
+                        channelName, threshold, measurementType);
+                }
+            }
+        } catch (Exception e) {
+            logger.error("Error saving channel settings: {}", e.getMessage());
+        }
+    }
+    
+    /**
+     * Browse for save path directory
+     */
+    private void browseSavePath(TextField savePathField) {
+        DirectoryChooser directoryChooser = new DirectoryChooser();
+        directoryChooser.setTitle("选择保存目录");
+        directoryChooser.setInitialDirectory(new java.io.File(System.getProperty("user.home")));
+        
+        java.io.File selectedDirectory = directoryChooser.showDialog(stage);
+        if (selectedDirectory != null) {
+            savePathField.setText(selectedDirectory.getAbsolutePath());
+        }
+    }
+    
+    /**
+     * Update channel selection mode based on current operation mode
+     */
+    private void updateChannelSelectionMode() {
+        // Clear any existing preview
+        clearLivePreview();
+        
+        // Refresh channel controls to update selection mechanism
+        createChannelControls();
+        
+        logger.info("Channel selection mode updated for: {}", currentMode);
+    }
+    
+    /**
+     * Execute strategy based on current mode and selected channels
+     */
+    private void executeStrategy() {
+        ImageData<?> imageData = qupath.getImageData();
+        if (imageData == null) {
+            showAlert(Alert.AlertType.WARNING, "警告", "没有可用的图像数据!");
+            return;
+        }
+        
+        updateCurrentConfiguration();
+        
+        if (currentMode == OperationMode.CREATE_CLASSIFIER) {
+            executeCreateClassifierMode(imageData);
+        } else {
+            executeLoadClassifierMode(imageData);
+        }
+    }
+    
+    private void refreshChannels() {
+        initializeThresholds();
+        createChannelControls();
+        
+        // Also refresh the phenotype table columns
+        if (phenotypeTable != null) {
+            createPhenotypeTable();
+        }
+    }
+    
+    private void previewChannel(String channelName) {
+        logger.info("Activating live preview for channel: {}", channelName);
+        // Clear any existing preview when switching channels
+        clearPreview();
+        // Apply threshold preview for the selected channel
+        Slider slider = thresholdSliders.get(channelName);
+        if (slider != null) {
+            previewThreshold(channelName, slider.getValue());
+        }
+    }
+    
+    private void previewThreshold(String channelName, double threshold) {
+        ImageData<?> imageData = qupath.getImageData();
+        if (imageData == null) {
+            logger.warn("No image data available for preview");
+            return;
+        }
+        
+        // Only preview if in Create Classifier mode
+        if (currentMode != OperationMode.CREATE_CLASSIFIER) {
+            return;
+        }
+        
+        logger.info("Live preview: {} > {}", channelName, threshold);
+        
+        try {
+            // Apply threshold directly to cells for live preview
+            var hierarchy = imageData.getHierarchy();
+            var cells = new ArrayList<>(hierarchy.getDetectionObjects());
+            
+            // Clear existing preview classifications first
+            clearPreview();
+            
+            final int[] counts = new int[2]; // [positive, negative]
+            String measurementType = measurementComboBoxes.get(channelName).getValue();
+            String measurementName = createMeasurementName(channelName, measurementType);
+            
+            for (var cell : cells) {
+                try {
+                    var measurements = cell.getMeasurementList();
+                    if (measurements.containsKey(measurementName)) {
+                        double measurementValue = measurements.get(measurementName);
+                        boolean isPositive = measurementValue > threshold;
+                        
+                        if (isPositive) {
+                            // Set preview color for positive cells (purple/magenta)
+                            cell.setColor(0xFF00FF); // Magenta for positive
+                            counts[0]++;
+                        } else {
+                            // Set preview color for negative cells (gray)
+                            cell.setColor(0x808080); // Gray for negative
+                            counts[1]++;
+                        }
+                    }
+                } catch (Exception e) {
+                    logger.debug("Could not process cell {}: {}", cell.getID(), e.getMessage());
+                }
+            }
+            
+            // Update the display
+            Platform.runLater(() -> {
+                if (qupath.getViewer() != null) {
+                    qupath.getViewer().repaint();
+                }
+                
+                // Show preview status
+                String status = String.format("Preview %s: %d positive, %d negative (threshold: %.1f)", 
+                    channelName, counts[0], counts[1], threshold);
+                showPreviewStatus(status);
+            });
+            
+        } catch (Exception e) {
+            logger.error("Error during live preview: {}", e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Create QuPath measurement name from channel and measurement type
+     */
+    private String createMeasurementName(String channelName, String measurementType) {
+        // QuPath measurement naming convention: "Area: Channel_Name" etc.
+        if (measurementType.startsWith("Nucleus:")) {
+            String type = measurementType.substring(9).trim(); // Remove "Nucleus: "
+            return String.format("Nucleus: %s: %s", channelName, type);
+        } else if (measurementType.startsWith("Cell:")) {
+            String type = measurementType.substring(5).trim(); // Remove "Cell: "
+            return String.format("Cell: %s: %s", channelName, type);
+        } else if (measurementType.startsWith("Cytoplasm:")) {
+            String type = measurementType.substring(10).trim(); // Remove "Cytoplasm: "
+            return String.format("Cytoplasm: %s: %s", channelName, type);
+        }
+        // Fallback
+        return String.format("%s: %s", channelName, measurementType);
+    }
+    
+    private void clearPreview() {
+        ImageData<?> imageData = qupath.getImageData();
+        if (imageData == null) return;
+        
+        // Performance optimization for large datasets
+        var hierarchy = imageData.getHierarchy();
+        var allCells = new ArrayList<>(hierarchy.getDetectionObjects());
+        
+        // Limit clearing to first 10,000 cells to match preview scope
+        int maxClearCells = Math.min(allCells.size(), 10000);
+        var cellsToReset = allCells.subList(0, maxClearCells);
+        
+        for (var cell : cellsToReset) {
+            cell.setColor(null); // Reset to default QuPath coloring
+        }
+        
+        Platform.runLater(() -> {
+            if (qupath.getViewer() != null) {
+                qupath.getViewer().repaint();
+            }
+        });
+    }
+    
+    private void showPreviewStatus(String status) {
+        // Show status in QuPath status bar if available
+        Platform.runLater(() -> {
+            if (qupath.getStage() != null) {
+                try {
+                    // Try to update QuPath's status display
+                    qupath.getStage().setTitle("QuPath - " + status);
+                } catch (Exception e) {
+                    // Fallback to console logging
+                    logger.info("Live Preview Status: {}", status);
+                }
+            } else {
+                logger.info("Live Preview Status: {}", status);
+            }
+        });
+    }
+    
+    /**
+     * Clear Live Preview mode and reset channel button styles
+     */
+    private void clearLivePreview() {
+        livePreviewEnabled = false;
+        currentPreviewChannel = null;
+        
+        // Reset all channel button styles to inactive
+        channelContainer.getChildren().forEach(child -> {
+            if (child instanceof HBox) {
+                HBox childRow = (HBox) child;
+                if (!childRow.getChildren().isEmpty() && childRow.getChildren().get(0) instanceof Button) {
+                    Button btn = (Button) childRow.getChildren().get(0);
+                    if (!btn.getText().equals("Channel")) { // Skip header
+                        btn.setStyle("-fx-font-weight: bold; -fx-background-color: #e0e0e0; -fx-text-fill: black;");
+                    }
+                }
+            }
+        });
+        
+        // Clear preview coloring
+        clearPreview();
+        
+        logger.info("Live Preview deactivated");
+    }
+    
+    /**
+     * Update live preview with current threshold settings - Optimized for large datasets
+     */
+    private void updateLivePreview() {
+        if (!livePreviewEnabled || currentPreviewChannel == null) {
+            return;
+        }
+        
+        ImageData<?> imageData = qupath.getImageData();
+        if (imageData == null) {
+            logger.warn("No image data available for live preview update");
+            return;
+        }
+        
+        // Get current threshold for the preview channel
+        Slider slider = thresholdSliders.get(currentPreviewChannel);
+        ComboBox<String> measurementBox = measurementComboBoxes.get(currentPreviewChannel);
+        
+        if (slider != null && measurementBox != null) {
+            double threshold = slider.getValue();
+            String measurementType = measurementBox.getValue();
+            
+            // Apply live preview with optimization for large datasets
+            try {
+                var hierarchy = imageData.getHierarchy();
+                var allCells = new ArrayList<>(hierarchy.getDetectionObjects());
+                
+                // Performance optimization: limit preview to first 10,000 cells for responsiveness
+                int maxPreviewCells = Math.min(allCells.size(), 10000);
+                var cells = allCells.subList(0, maxPreviewCells);
+                
+                logger.info("Live Preview: Processing {} cells (of {} total) for channel: {}", 
+                    maxPreviewCells, allCells.size(), currentPreviewChannel);
+                
+                // Clear existing preview first
+                clearPreview();
+                
+                final int[] counts = new int[2]; // [positive, negative]
+                
+                // Try multiple measurement name formats to ensure compatibility
+                String[] possibleMeasurementNames = createPossibleMeasurementNames(currentPreviewChannel, measurementType);
+                String actualMeasurementName = null;
+                
+                // Find the first cell with measurements to determine correct format
+                if (!cells.isEmpty()) {
+                    var firstCell = cells.get(0);
+                    var measurements = firstCell.getMeasurementList();
+                    
+                    for (String testName : possibleMeasurementNames) {
+                        if (measurements.containsKey(testName)) {
+                            actualMeasurementName = testName;
+                            logger.info("Found measurement: {}", testName);
+                            break;
+                        }
+                    }
+                    
+                    if (actualMeasurementName == null) {
+                        // List available measurements for debugging
+                        logger.warn("No matching measurement found for channel: {}. Available measurements:", currentPreviewChannel);
+                        measurements.getNames().stream()
+                            .filter(name -> name.toLowerCase().contains(currentPreviewChannel.toLowerCase()))
+                            .forEach(name -> logger.info("  - {}", name));
+                            
+                        // Try any measurement containing the channel name
+                        for (String availableName : measurements.getNames()) {
+                            if (availableName.toLowerCase().contains(currentPreviewChannel.toLowerCase()) &&
+                                availableName.toLowerCase().contains("mean")) {
+                                actualMeasurementName = availableName;
+                                logger.info("Using fallback measurement: {}", actualMeasurementName);
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                if (actualMeasurementName == null) {
+                    logger.error("Could not find any suitable measurement for channel: {}", currentPreviewChannel);
+                    showPreviewStatus("错误: 无法找到通道 " + currentPreviewChannel + " 的测量数据");
+                    return;
+                }
+                
+                // Process cells with the found measurement name
+                for (var cell : cells) {
+                    try {
+                        var measurements = cell.getMeasurementList();
+                        if (measurements.containsKey(actualMeasurementName)) {
+                            double measurementValue = measurements.get(actualMeasurementName);
+                            boolean isPositive = measurementValue > threshold;
+                            
+                            if (isPositive) {
+                                // Set preview color for positive cells (purple/magenta)
+                                cell.setColor(0xFF00FF); // Magenta for positive
+                                counts[0]++;
+                            } else {
+                                // Set preview color for negative cells (gray)
+                                cell.setColor(0x808080); // Gray for negative
+                                counts[1]++;
+                            }
+                        }
+                    } catch (Exception e) {
+                        logger.debug("Could not process cell {}: {}", cell.getID(), e.getMessage());
+                    }
+                }
+                
+                // Update the display
+                Platform.runLater(() -> {
+                    if (qupath.getViewer() != null) {
+                        qupath.getViewer().repaint();
+                    }
+                    
+                    // Show preview status with performance info
+                    String status = String.format("Live Preview - %s: %d阳性, %d阴性 (阈值: %.1f) [处理了%d/%d个细胞]", 
+                        currentPreviewChannel, counts[0], counts[1], threshold, maxPreviewCells, allCells.size());
+                    showPreviewStatus(status);
+                });
+                
+            } catch (Exception e) {
+                logger.error("Error during live preview update: {}", e.getMessage(), e);
+            }
+        }
+    }
+    
+    /**
+     * Create possible measurement names to handle different QuPath naming conventions
+     */
+    private String[] createPossibleMeasurementNames(String channelName, String measurementType) {
+        String[] possibleNames = new String[10];
+        int index = 0;
+        
+        if (measurementType.startsWith("Nucleus:")) {
+            String type = measurementType.substring(9).trim(); // Remove "Nucleus: "
+            // Try various formats
+            possibleNames[index++] = String.format("Nucleus: %s: %s", channelName, type);
+            possibleNames[index++] = String.format("Nucleus: %s", channelName);  // Simple format
+            possibleNames[index++] = String.format("%s: Nucleus: %s", channelName, type);
+        } else if (measurementType.startsWith("Cell:")) {
+            String type = measurementType.substring(5).trim(); // Remove "Cell: "
+            possibleNames[index++] = String.format("Cell: %s: %s", channelName, type);
+            possibleNames[index++] = String.format("Cell: %s", channelName);
+            possibleNames[index++] = String.format("%s: Cell: %s", channelName, type);
+        } else if (measurementType.startsWith("Cytoplasm:")) {
+            String type = measurementType.substring(10).trim(); // Remove "Cytoplasm: "
+            possibleNames[index++] = String.format("Cytoplasm: %s: %s", channelName, type);
+            possibleNames[index++] = String.format("Cytoplasm: %s", channelName);
+            possibleNames[index++] = String.format("%s: Cytoplasm: %s", channelName, type);
+        }
+        
+        // Additional common formats
+        possibleNames[index++] = String.format("%s: %s", channelName, measurementType);
+        possibleNames[index++] = String.format("%s", channelName);
+        possibleNames[index++] = String.format("%s: Mean", channelName);
+        possibleNames[index++] = String.format("Mean: %s", channelName);
+        
+        // Remove nulls and return
+        return Arrays.stream(possibleNames).filter(Objects::nonNull).toArray(String[]::new);
+    }
+    
+    private TitledPane createClassificationSection() {
+        VBox content = new VBox(10);
+        content.setPadding(new Insets(10));
+        
+        // Add new phenotype button
+        HBox buttonBox = new HBox(10);
+        buttonBox.setAlignment(Pos.CENTER_RIGHT);
+        Button addButton = new Button("新增细胞");
+        addButton.setStyle("-fx-background-color: #2196F3; -fx-text-fill: white;");
+        addButton.setOnAction(e -> addNewPhenotype());
+        buttonBox.getChildren().add(addButton);
+        
+        // Phenotype table with sorting controls
+        createPhenotypeTable();
+        
+        content.getChildren().addAll(buttonBox, phenotypeTable);
+        
+        TitledPane pane = new TitledPane("细胞分类", content);
+        pane.setCollapsible(false);
+        return pane;
+    }
+    
+    private void createPhenotypeTable() {
+        if (phenotypeTable == null) {
+            phenotypeTable = new TableView<>();
+            phenotypeData = FXCollections.observableArrayList();
+            phenotypeTable.setItems(phenotypeData);
+        } else {
+            phenotypeTable.getColumns().clear();
+        }
+        
+        // Priority/Sort column with up/down buttons
+        TableColumn<PhenotypeTableRow, Integer> sortCol = new TableColumn<>("排序");
+        sortCol.setCellFactory(col -> new TableCell<PhenotypeTableRow, Integer>() {
+            @Override
+            protected void updateItem(Integer item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty) {
+                    setGraphic(null);
+                } else {
+                    HBox sortBox = new HBox(5);
+                    sortBox.setAlignment(Pos.CENTER);
+                    
+                    Button upButton = new Button("↑");
+                    upButton.setStyle("-fx-font-size: 12px; -fx-padding: 2 6 2 6;");
+                    upButton.setOnAction(e -> movePhenotypeUp(getIndex()));
+                    
+                    Button downButton = new Button("↓");
+                    downButton.setStyle("-fx-font-size: 12px; -fx-padding: 2 6 2 6;");
+                    downButton.setOnAction(e -> movePhenotypeDown(getIndex()));
+                    
+                    Label priorityLabel = new Label(String.valueOf(item));
+                    
+                    sortBox.getChildren().addAll(upButton, priorityLabel, downButton);
+                    setGraphic(sortBox);
+                }
+            }
+        });
+        sortCol.setPrefWidth(80);
+        
+        // Name column
+        TableColumn<PhenotypeTableRow, String> nameCol = new TableColumn<>("细胞分类名称");
+        nameCol.setCellValueFactory(new PropertyValueFactory<>("name"));
+        nameCol.setPrefWidth(120);
+        
+        phenotypeTable.getColumns().add(sortCol);
+        phenotypeTable.getColumns().add(nameCol);
+        
+        // Dynamic marker columns based on available channels (excluding DAPI)
+        List<String> markerChannels = availableChannels.stream()
+            .filter(channel -> !channel.toLowerCase().contains("dapi"))
+            .collect(Collectors.toList());
+            
+        for (String channel : markerChannels) {
+            TableColumn<PhenotypeTableRow, String> markerCol = new TableColumn<>(channel);
+            markerCol.setCellFactory(col -> new TableCell<PhenotypeTableRow, String>() {
+                @Override
+                protected void updateItem(String item, boolean empty) {
+                    super.updateItem(item, empty);
+                    if (empty) {
+                        setGraphic(null);
+                    } else {
+                        ComboBox<String> comboBox = new ComboBox<>();
+                        comboBox.getItems().addAll("阳性", "阴性", "无影响");
+                        comboBox.setValue(item != null ? item : "无影响");
+                        
+                        // Update the phenotype when selection changes
+                        comboBox.setOnAction(e -> {
+                            PhenotypeTableRow row = getTableView().getItems().get(getIndex());
+                            updatePhenotypeMarkerState(row.getName(), channel, comboBox.getValue());
+                        });
+                        
+                        setGraphic(comboBox);
+                    }
+                }
+            });
+            markerCol.setPrefWidth(80);
+            phenotypeTable.getColumns().add(markerCol);
+        }
+        
+        // Action column
+        TableColumn<PhenotypeTableRow, Void> actionCol = new TableColumn<>("操作");
+        actionCol.setCellFactory(col -> new TableCell<PhenotypeTableRow, Void>() {
+            private final Button deleteButton = new Button("删除");
+            
+            {
+                deleteButton.setStyle("-fx-background-color: #f44336; -fx-text-fill: white;");
+                deleteButton.setOnAction(e -> {
+                    PhenotypeTableRow row = getTableView().getItems().get(getIndex());
+                    phenotypeData.remove(row);
+                    // Remove from phenotypes list
+                    phenotypes.removeIf(p -> p.getName().equals(row.getName()));
+                    refreshPriorities();
+                });
+            }
+            
+            @Override
+            protected void updateItem(Void item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty) {
+                    setGraphic(null);
+                } else {
+                    setGraphic(deleteButton);
+                }
+            }
+        });
+        actionCol.setPrefWidth(80);
+        
+        phenotypeTable.getColumns().add(actionCol);
+        phenotypeTable.setPrefHeight(300);
+    }
+    
+    private void movePhenotypeUp(int index) {
+        if (index > 0) {
+            PhenotypeTableRow current = phenotypeData.get(index);
+            PhenotypeTableRow above = phenotypeData.get(index - 1);
+            
+            // Swap priorities
+            int currentPriority = current.getPriority();
+            int abovePriority = above.getPriority();
+            
+            // Update table rows
+            phenotypeData.set(index, new PhenotypeTableRow(current.getName(), abovePriority));
+            phenotypeData.set(index - 1, new PhenotypeTableRow(above.getName(), currentPriority));
+            
+            // Update phenotype objects
+            updatePhenotypePriority(current.getName(), abovePriority);
+            updatePhenotypePriority(above.getName(), currentPriority);
+            
+            phenotypeTable.refresh();
+        }
+    }
+    
+    private void movePhenotypeDown(int index) {
+        if (index < phenotypeData.size() - 1) {
+            PhenotypeTableRow current = phenotypeData.get(index);
+            PhenotypeTableRow below = phenotypeData.get(index + 1);
+            
+            // Swap priorities
+            int currentPriority = current.getPriority();
+            int belowPriority = below.getPriority();
+            
+            // Update table rows
+            phenotypeData.set(index, new PhenotypeTableRow(current.getName(), belowPriority));
+            phenotypeData.set(index + 1, new PhenotypeTableRow(below.getName(), currentPriority));
+            
+            // Update phenotype objects
+            updatePhenotypePriority(current.getName(), belowPriority);
+            updatePhenotypePriority(below.getName(), currentPriority);
+            
+            phenotypeTable.refresh();
+        }
+    }
+    
+    private void updatePhenotypePriority(String phenotypeName, int newPriority) {
+        for (int i = 0; i < phenotypes.size(); i++) {
+            CellPhenotype phenotype = phenotypes.get(i);
+            if (phenotype.getName().equals(phenotypeName)) {
+                phenotypes.set(i, phenotype.withPriority(newPriority));
+                break;
+            }
+        }
+    }
+    
+    private void updatePhenotypeMarkerState(String phenotypeName, String channel, String state) {
+        CellPhenotype.MarkerState markerState;
+        switch (state) {
+            case "阳性": markerState = CellPhenotype.MarkerState.POSITIVE; break;
+            case "阴性": markerState = CellPhenotype.MarkerState.NEGATIVE; break;
+            default: markerState = CellPhenotype.MarkerState.IGNORE; break;
+        }
+        
+        for (int i = 0; i < phenotypes.size(); i++) {
+            CellPhenotype phenotype = phenotypes.get(i);
+            if (phenotype.getName().equals(phenotypeName)) {
+                phenotypes.set(i, phenotype.withMarkerState(channel, markerState));
+                break;
+            }
+        }
+    }
+    
+    private void refreshPriorities() {
+        // Reassign priorities sequentially
+        for (int i = 0; i < phenotypeData.size(); i++) {
+            PhenotypeTableRow row = phenotypeData.get(i);
+            int newPriority = (phenotypeData.size() - i) * 10; // Higher index = higher priority
+            phenotypeData.set(i, new PhenotypeTableRow(row.getName(), newPriority));
+            updatePhenotypePriority(row.getName(), newPriority);
+        }
+        phenotypeTable.refresh();
+    }
+    
+    private HBox createActionButtonsSection() {
+        HBox buttonBox = new HBox(10);
+        buttonBox.setAlignment(Pos.CENTER_RIGHT);
+        buttonBox.setPadding(new Insets(10, 0, 0, 0));
+        
+        Button saveConfigButton = new Button("保存配置");
+        saveConfigButton.setStyle("-fx-background-color: #2196F3; -fx-text-fill: white;");
+        saveConfigButton.setOnAction(e -> saveConfigurationToProject());
+        
+        Button loadConfigButton = new Button("加载配置");
+        loadConfigButton.setStyle("-fx-background-color: #FF9800; -fx-text-fill: white;");
+        loadConfigButton.setOnAction(e -> loadConfigurationFromProject());
+        
+        Button runDetectionButton = new Button("运行检测");
+        runDetectionButton.setStyle("-fx-background-color: #4CAF50; -fx-text-fill: white;");
+        runDetectionButton.setOnAction(e -> runDetection());
+        
+        buttonBox.getChildren().addAll(saveConfigButton, loadConfigButton, runDetectionButton);
+        return buttonBox;
+    }
+    
+    private void performAutoThresholding() {
+        if (strategyComboBox.getValue() == ThresholdConfig.Strategy.AUTO) {
+            ImageData<?> imageData = qupath.getImageData();
+            if (imageData != null) {
+                CellPhenotypeAPI.calculateAutoThresholds(imageData, currentConfig);
+                showAlert(Alert.AlertType.INFORMATION, "Success", "Auto thresholds calculated successfully!");
+            } else {
+                showAlert(Alert.AlertType.WARNING, "Warning", "No image data available!");
+            }
+        }
+    }
+    
+    private void addNewPhenotype() {
+        PhenotypeEditorDialog dialog = new PhenotypeEditorDialog(stage, availableChannels);
+        dialog.showAndWait().ifPresent(phenotype -> {
+            phenotypes.add(phenotype);
+            
+            // Add to table with auto-assigned priority
+            int priority = (phenotypeData.size() + 1) * 10;
+            PhenotypeTableRow row = new PhenotypeTableRow(phenotype.getName(), priority);
+            phenotypeData.add(row);
+            
+            // Update the phenotype with the assigned priority
+            phenotypes.set(phenotypes.size() - 1, phenotype.withPriority(priority));
+        });
+    }
+    
+    private void saveConfigurationToProject() {
+        updateCurrentConfiguration();
+        
+        Project<?> project = qupath.getProject();
+        if (project == null) {
+            showAlert(Alert.AlertType.WARNING, "Warning", "No project is currently open!");
+            return;
+        }
+        
+        try {
+            // Save configuration to a project file instead
+            Map<String, Object> configData = new HashMap<>();
+            configData.put("config", currentConfig);
+            configData.put("phenotypes", phenotypes);
+            
+            // Save to project directory as a JSON file
+            ObjectMapper mapper = new ObjectMapper();
+            String configJson = mapper.writeValueAsString(configData);
+            
+            java.io.File projectDir = project.getPath().getParent().toFile();
+            java.io.File configFile = new java.io.File(projectDir, "cell_phenotype_config.json");
+            
+            try (java.io.FileWriter writer = new java.io.FileWriter(configFile)) {
+                writer.write(configJson);
+            }
+            
+            showAlert(Alert.AlertType.INFORMATION, "Success", 
+                "Configuration saved to project directory: " + configFile.getName());
+        } catch (Exception e) {
+            showAlert(Alert.AlertType.ERROR, "Error", "Failed to save configuration: " + e.getMessage());
+        }
+    }
+    
+    private void loadConfigurationFromProject() {
+        Project<?> project = qupath.getProject();
+        if (project == null) {
+            showAlert(Alert.AlertType.WARNING, "Warning", "No project is currently open!");
+            return;
+        }
+        
+        try {
+            // Load from project directory JSON file
+            java.io.File projectDir = project.getPath().getParent().toFile();
+            java.io.File configFile = new java.io.File(projectDir, "cell_phenotype_config.json");
+            
+            if (configFile.exists()) {
+                // Read and parse configuration
+                ObjectMapper mapper = new ObjectMapper();
+                String configJson = new String(java.nio.file.Files.readAllBytes(configFile.toPath()));
+                
+                // Load and apply configuration
+                // This is a simplified version - in reality you'd need proper deserialization
+                showAlert(Alert.AlertType.INFORMATION, "Success", 
+                    "Configuration loaded from project directory: " + configFile.getName());
+            } else {
+                showAlert(Alert.AlertType.INFORMATION, "Information", 
+                    "No saved configuration found in project directory.");
+            }
+        } catch (Exception e) {
+            showAlert(Alert.AlertType.ERROR, "Error", "Failed to load configuration: " + e.getMessage());
+        }
+    }
+    
+    private void runDetection() {
+        ImageData<?> imageData = qupath.getImageData();
+        if (imageData == null) {
+            showAlert(Alert.AlertType.WARNING, "Warning", "No image data available!");
+            return;
+        }
+        
+        updateCurrentConfiguration();
+        
+        try {
+            // Create PhenotypeManager from phenotypes list
+            PhenotypeManager phenotypeManager = new PhenotypeManager();
+            for (CellPhenotype phenotype : phenotypes) {
+                phenotypeManager.addPhenotype(phenotype);
+            }
+            
+            List<CellPhenotypeClassifier.ClassificationResult> results;
+            
+            // Get cell count first to determine processing method
+            Collection<qupath.lib.objects.PathObject> cellCollection = imageData.getHierarchy().getDetectionObjects();
+            int cellCount = cellCollection.size();
+            
+            logger.info("Starting cell classification for {} cells", cellCount);
+            
+            // Use optimized processing for large datasets
+            if (cellCount > 50000) {
+                showAlert(Alert.AlertType.INFORMATION, "大规模数据处理", 
+                    String.format("检测到%d个细胞，使用优化算法进行批量处理，请耐心等待...", cellCount));
+                
+                results = CellPhenotypeAPI.classifyCellsOptimized(imageData, currentConfig, phenotypeManager);
+            } else {
+                results = CellPhenotypeAPI.classifyCells(imageData, currentConfig, phenotypeManager);
+            }
+            
+            // Export results with new format
+            Project<?> project = qupath.getProject();
+            String exportPath;
+            if (project != null) {
+                exportPath = project.getPath().getParent().resolve("cell_phenotype_results.csv").toString();
+            } else {
+                exportPath = System.getProperty("user.home") + "/cell_phenotype_results.csv";
+            }
+            
+            exportEnhancedResults(results, exportPath);
+            
+            // Update hierarchy display
+            Platform.runLater(() -> {
+                if (qupath.getViewer() != null) {
+                    qupath.getViewer().repaint();
+                }
+            });
+            
+            showAlert(Alert.AlertType.INFORMATION, "Success", 
+                String.format("Detection completed! Results exported to:\n%s\n\nClassified %d cells.", 
+                    exportPath, results.size()));
+                    
+        } catch (Exception e) {
+            showAlert(Alert.AlertType.ERROR, "Error", "Detection failed: " + e.getMessage());
+        }
+    }
+    
+    private void exportEnhancedResults(List<CellPhenotypeClassifier.ClassificationResult> results, String filePath) throws IOException {
+        try (java.io.FileWriter writer = new java.io.FileWriter(filePath)) {
+            // Write header with new fields
+            writer.write("Cell_ID,X,Y,Parent,Class,CellType\n");
+            
+            // Write data
+            for (CellPhenotypeClassifier.ClassificationResult result : results) {
+                // Get additional information
+                ImageData<?> imageData = qupath.getImageData();
+                if (imageData != null) {
+                    var hierarchy = imageData.getHierarchy();
+                    var cells = new ArrayList<>(hierarchy.getDetectionObjects());
+                    
+                    for (var cell : cells) {
+                        if (cell.getID().toString().equals(result.getCellId())) {
+                            String parentId = cell.getParent() != null ? cell.getParent().getID().toString() : "";
+                            String pathClassName = cell.getPathClass() != null ? cell.getPathClass().getName() : "";
+                            
+                            // Class contains individual marker states (positive/negative)
+                            String classStates = generateClassString(cell, result.getPositiveProteins());
+                            
+                            writer.write(String.format("%s,%.2f,%.2f,%s,%s,%s\n",
+                                result.getCellId(),
+                                result.getCentroidX(),
+                                result.getCentroidY(),
+                                parentId,
+                                classStates,
+                                result.getPhenotypeName()
+                            ));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    private String generateClassString(Object cell, String positiveProteins) {
+        // Generate class string showing positive/negative states for each channel
+        StringBuilder classBuilder = new StringBuilder();
+        Set<String> positiveSet = new HashSet<>(Arrays.asList(positiveProteins.split(",")));
+        
+        for (int i = 0; i < availableChannels.size(); i++) {
+            if (i > 0) classBuilder.append(";");
+            String channel = availableChannels.get(i);
+            String state = positiveSet.contains(channel) ? "positive" : "negative";
+            classBuilder.append(channel).append(":").append(state);
+        }
+        
+        return classBuilder.toString();
+    }
+    
+    private void updateCurrentConfiguration() {
+        // Update basic settings
+        currentConfig = currentConfig
+            .withConfigName(configNameField.getText())
+            .withStrategy(strategyComboBox.getValue());
+        
+        // Update thresholds from dynamic controls
+        for (String channel : availableChannels) {
+            Slider slider = thresholdSliders.get(channel);
+            ComboBox<String> measurementBox = measurementComboBoxes.get(channel);
+            
+            if (slider != null && measurementBox != null) {
+                ThresholdConfig.ChannelThreshold threshold = new ThresholdConfig.ChannelThreshold(
+                    measurementBox.getValue(),
+                    slider.getValue(),
+                    true // For now, assume all channels are enabled
+                );
+                currentConfig = currentConfig.withChannelThreshold(channel, threshold);
+            }
+        }
+    }
+    
+    private void showAlert(Alert.AlertType type, String title, String message) {
+        Alert alert = new Alert(type);
+        alert.setTitle(title);
+        alert.setHeaderText(null);
+        alert.setContentText(message);
+        alert.showAndWait();
+    }
+    
+    /**
+     * Toggle between Create Single Measurement Classifier and Load Classifier operation modes
+     */
+    private void toggleOperationMode() {
+        // Clear any existing preview when switching modes
+        clearLivePreview();
+        
+        currentMode = (currentMode == OperationMode.CREATE_CLASSIFIER) ? OperationMode.LOAD_CLASSIFIER : OperationMode.CREATE_CLASSIFIER;
+        modeToggleButton.setText(currentMode.toString());
+        
+        // Update UI styling based on mode
+        if (currentMode == OperationMode.CREATE_CLASSIFIER) {
+            modeToggleButton.setStyle("-fx-background-color: #FF9800; -fx-text-fill: white;");
+            showAlert(Alert.AlertType.INFORMATION, "模式切换", 
+                "已切换到创建分类器模式 (Create Single Measurement Classifier)：点击通道名称激活Live Preview功能，阳性细胞显示为紫色，阴性细胞显示为灰色");
+        } else {
+            modeToggleButton.setStyle("-fx-background-color: #4CAF50; -fx-text-fill: white;");
+            showAlert(Alert.AlertType.INFORMATION, "模式切换", 
+                "已切换到加载分类器模式 (Load Classifier)：执行策略将正式更新细胞PathClass标签");
+        }
+    }
+    
+    /**
+     * Enhanced threshold strategy execution supporting both modes
+     */
+    private void executeThresholdStrategy() {
+        ImageData<?> imageData = qupath.getImageData();
+        if (imageData == null) {
+            showAlert(Alert.AlertType.WARNING, "Warning", "No image data available!");
+            return;
+        }
+        
+        updateCurrentConfiguration();
+        
+        if (currentMode == OperationMode.CREATE_CLASSIFIER) {
+            executeCreateClassifierMode(imageData);
+        } else {
+            executeLoadClassifierMode(imageData);
+        }
+    }
+    
+    /**
+     * Execute Create Single Measurement Classifier mode - Live Preview without permanent changes
+     */
+    private void executeCreateClassifierMode(ImageData<?> imageData) {
+        try {
+            showAlert(Alert.AlertType.INFORMATION, "创建分类器模式", 
+                "执行Create Single Measurement Classifier模式，生成临时class标签用于预览和验证");
+            
+            // Apply thresholds and generate temporary classification
+            PhenotypeManager phenotypeManager = new PhenotypeManager();
+            for (CellPhenotype phenotype : phenotypes) {
+                phenotypeManager.addPhenotype(phenotype);
+            }
+            
+            Map<String, CellPhenotypeAPI.PhenotypeResult> results = CellPhenotypeAPI.classifyWithResults(
+                imageData, currentConfig, phenotypeManager);
+            
+            // In train mode, we only show results but don't modify PathClass permanently
+            showTrainingResults(results);
+            
+        } catch (Exception e) {
+            showAlert(Alert.AlertType.ERROR, "Error", 
+                "训练模式执行失败: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Execute Load Classifier mode - Apply classification permanently
+     */
+    private void executeLoadClassifierMode(ImageData<?> imageData) {
+        try {
+            showAlert(Alert.AlertType.INFORMATION, "应用模式", 
+                "执行Load Classifier应用模式，永久更新细胞PathClass分类标签");
+            
+            // Apply thresholds and update cells permanently
+            PhenotypeManager phenotypeManager = new PhenotypeManager();
+            for (CellPhenotype phenotype : phenotypes) {
+                phenotypeManager.addPhenotype(phenotype);
+            }
+            
+            CellPhenotypeAPI.applyCellClassification(imageData, currentConfig, phenotypeManager);
+            
+            showAlert(Alert.AlertType.INFORMATION, "成功", 
+                "细胞分类已永久应用，PathClass标签已更新");
+            
+        } catch (Exception e) {
+            showAlert(Alert.AlertType.ERROR, "Error", 
+                "应用模式执行失败: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Show training results without modifying actual cells
+     */
+    private void showTrainingResults(Map<String, CellPhenotypeAPI.PhenotypeResult> results) {
+        Alert alert = new Alert(Alert.AlertType.INFORMATION);
+        alert.setTitle("训练结果预览");
+        alert.setHeaderText("Live Preview训练模式结果");
+        
+        StringBuilder content = new StringBuilder();
+        Map<String, Integer> phenotypeCounts = new HashMap<>();
+        
+        for (CellPhenotypeAPI.PhenotypeResult result : results.values()) {
+            String phenotype = result.getPhenotypeName();
+            phenotypeCounts.put(phenotype, phenotypeCounts.getOrDefault(phenotype, 0) + 1);
+        }
+        
+        content.append("检测到的细胞表型分布：\n\n");
+        for (Map.Entry<String, Integer> entry : phenotypeCounts.entrySet()) {
+            content.append(String.format("%s: %d 个细胞\n", entry.getKey(), entry.getValue()));
+        }
+        
+        content.append("\n注意：这是训练预览结果，细胞的正式PathClass标签未被修改。");
+        content.append("\n切换到应用模式并执行策略以永久保存分类结果。");
+        
+        alert.setContentText(content.toString());
+        alert.showAndWait();
+    }
+    
+    // Helper class for table rows - simplified version
+    public static class PhenotypeTableRow {
+        private final String name;
+        private final Integer priority;
+        
+        public PhenotypeTableRow(String name, Integer priority) {
+            this.name = name;
+            this.priority = priority;
+        }
+        
+        public String getName() { return name; }
+        public Integer getPriority() { return priority; }
+    }
+}

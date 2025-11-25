@@ -1,0 +1,218 @@
+plugins {
+    id 'java'
+    id 'application'
+    id 'org.openjfx.javafxplugin' version '0.0.13'
+}
+
+group = 'com.cycbiox.qupath'
+version = '1.0.0'
+description = 'CycBiOx - Advanced Immunofluorescence Cell Classification and Phenotype Analysis for QuPath'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+    maven {
+        url = 'https://maven.scijava.org/content/repositories/releases'
+    }
+    maven {
+        url = 'https://maven.scijava.org/content/repositories/snapshots'
+    }
+}
+
+javafx {
+    version = "21"
+    modules = ['javafx.controls', 'javafx.fxml']
+}
+
+dependencies {
+    // QuPath core dependencies - use compileOnly to avoid conflicts
+    compileOnly 'io.github.qupath:qupath-gui-fx:0.6.0'
+    compileOnly 'io.github.qupath:qupath-core:0.6.0'
+    compileOnly 'io.github.qupath:qupath-core-processing:0.6.0'
+    
+    // JSON processing for configuration management
+    implementation 'com.fasterxml.jackson.core:jackson-core:2.15.2'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.15.2'
+    implementation 'com.fasterxml.jackson.core:jackson-annotations:2.15.2'
+    
+    // Logging
+    implementation 'org.slf4j:slf4j-api:2.0.7'
+    
+    // Testing dependencies
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.9.3'
+    testImplementation 'org.mockito:mockito-core:5.5.0'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+    testLogging {
+        events "passed", "skipped", "failed"
+    }
+}
+
+// Ensure proper JAR packaging for QuPath compatibility
+jar {
+    manifest {
+        attributes(
+            'Implementation-Title': project.description,
+            'Implementation-Version': project.version,
+            'Implementation-Vendor': 'Cell Phenotype Manager Team',
+            'Automatic-Module-Name': 'cycbiox.qupath.extension',
+            'QuPath-Extension': 'true',
+            'QuPath-Version': '0.6.0',
+            'Java-Version': '21'
+        )
+    }
+    
+    // Include all runtime dependencies except QuPath ones (compileOnly)
+    from {
+        configurations.runtimeClasspath.collect { 
+            it.isDirectory() ? it : zipTree(it) 
+        }
+    } {
+        exclude 'META-INF/*.SF'
+        exclude 'META-INF/*.DSA' 
+        exclude 'META-INF/*.RSA'
+        exclude 'META-INF/*.MF'
+        exclude 'META-INF/INDEX.LIST'
+        exclude 'META-INF/DEPENDENCIES'
+        exclude 'META-INF/LICENSE*'
+        exclude 'META-INF/NOTICE*'
+    }
+    
+    // Ensure META-INF/services is preserved for service registration
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    
+    archiveFileName = "cycbiox-${project.version}.jar"
+}
+
+compileJava {
+    options.encoding = 'UTF-8'
+    options.compilerArgs += [
+        '-Xlint:unchecked', 
+        '-Xlint:deprecation',
+        '-parameters'
+    ]
+}
+
+compileTestJava {
+    options.encoding = 'UTF-8'
+    options.compilerArgs += ['-Xlint:unchecked', '-Xlint:deprecation']
+}
+
+// Task to verify QuPath compatibility
+task verifyQuPathCompatibility {
+    description = 'Verify QuPath extension compatibility'
+    group = 'verification'
+    
+    doLast {
+        println "Verifying QuPath extension compatibility..."
+        
+        // Check service registration file
+        def serviceFile = file('src/main/resources/META-INF/services/qupath.lib.gui.extensions.QuPathExtension')
+        if (!serviceFile.exists()) {
+            throw new GradleException("Service registration file not found: ${serviceFile}")
+        }
+        
+        def serviceContent = serviceFile.text.trim()
+        if (serviceContent != 'com.cellphenotype.qupath.CellPhenotypeExtension') {
+            throw new GradleException("Invalid service registration: ${serviceContent}")
+        }
+        
+        println "✓ Service registration file is correct"
+        
+        // Check main extension class exists
+        def extensionClass = file('src/main/java/com/cellphenotype/qupath/CellPhenotypeExtension.java')
+        if (!extensionClass.exists()) {
+            throw new GradleException("Main extension class not found: ${extensionClass}")
+        }
+        
+        println "✓ Main extension class exists"
+        
+        // Check version format
+        if (!version.matches(/\d+\.\d+\.\d+/)) {
+            throw new GradleException("Invalid version format. Expected x.y.z, got: ${version}")
+        }
+        
+        println "✓ Version format is valid: ${version}"
+        
+        println "QuPath extension compatibility verification passed!"
+    }
+}
+
+// Task to create distribution package
+task createDistribution(type: Zip) {
+    description = 'Create distribution package for QuPath extension'
+    group = 'distribution'
+    dependsOn jar
+    
+    from jar
+    from 'README.md'
+    from 'examples/'
+    
+    archiveFileName = "${project.name}-${project.version}-distribution.zip"
+    destinationDirectory = file('dist')
+}
+
+// Task to install extension to QuPath
+task installToQuPath(type: Copy) {
+    description = 'Install extension to QuPath extensions directory'
+    group = 'installation'
+    dependsOn jar
+    
+    from jar
+    into "${System.getProperty('user.home')}/.qupath/v0.6/extensions"
+    
+    doLast {
+        println "Extension installed to QuPath extensions directory"
+        println "Restart QuPath to load the new extension"
+    }
+}
+
+// Run verification before building
+build.dependsOn verifyQuPathCompatibility
+
+// Docker support for development environment
+task buildDockerImage(type: Exec) {
+    description = 'Build Docker image for development'
+    group = 'docker'
+    
+    workingDir '.'
+    commandLine 'docker', 'build', '-t', 'qupath-cell-phenotype-dev:latest', '.'
+}
+
+task runDockerContainer(type: Exec) {
+    description = 'Run Docker container for development'
+    group = 'docker'
+    dependsOn buildDockerImage
+    
+    workingDir '.'
+    commandLine 'docker', 'run', '-it', '--rm', 
+                '-v', "${projectDir}:/workspace",
+                'qupath-cell-phenotype-dev:latest'
+}
+
+// Documentation generation
+task generateDocs(type: Javadoc) {
+    description = 'Generate API documentation'
+    group = 'documentation'
+    
+    source = sourceSets.main.allJava
+    classpath = configurations.compileClasspath
+    destinationDir = file('docs/api')
+    
+    options {
+        encoding = 'UTF-8'
+        charSet = 'UTF-8'
+        windowTitle = 'Cell Phenotype Manager API Documentation'
+        docTitle = "Cell Phenotype Manager v${version}"
+        addBooleanOption('html5', true)
+        addStringOption('Xdoclint:none', '-quiet')
+    }
+}
