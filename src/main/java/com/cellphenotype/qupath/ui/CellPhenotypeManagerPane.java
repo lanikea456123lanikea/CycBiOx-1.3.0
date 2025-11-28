@@ -6548,40 +6548,18 @@ public class CellPhenotypeManagerPane {
                         intersects = false;
                     }
 
-                    // v1.5.0: 使用QuPath原生的简单且正确的方法
-                    // 基于用户反馈：使用QuPath ROI原生API进行检测
+                    // v1.6.0: 使用最简单的中心点检测（与QuPath原生一致）
+                    // 基于用户反馈：QuPath的Num Detections就是基于中心点，中心点在边缘也包含
                     boolean cellInROI = false;
 
                     try {
-                        // 方法1: 检查细胞ROI的中心点是否在选择ROI内（QuPath原生方法）
-                        if (roi.contains(cellROI.getCentroidX(), cellROI.getCentroidY())) {
+                        // 只检查细胞ROI的中心点（与QuPath原生逻辑一致）
+                        double cellCenterX = cellROI.getCentroidX();
+                        double cellCenterY = cellROI.getCentroidY();
+
+                        // 使用QuPath ROI.contains方法，检查中心点是否在ROI内（包含边界）
+                        if (roi.contains(cellCenterX, cellCenterY)) {
                             cellInROI = true;
-                        } else {
-                            // 方法2: 检查细胞ROI的边界框四个角点
-                            double cellMinX = cellROI.getBoundsX();
-                            double cellMinY = cellROI.getBoundsY();
-                            double cellMaxX = cellMinX + cellROI.getBoundsWidth();
-                            double cellMaxY = cellMinY + cellROI.getBoundsHeight();
-
-                            // 检查四个角点（使用QuPath ROI.contains方法）
-                            if (roi.contains(cellMinX, cellMinY) ||  // 左下角
-                                roi.contains(cellMaxX, cellMinY) ||  // 右下角
-                                roi.contains(cellMaxX, cellMaxY) ||  // 右上角
-                                roi.contains(cellMinX, cellMaxY)) {  // 左上角
-                                cellInROI = true;
-                            } else {
-                                // 方法3: 检查细胞ROI的中心和四个边的中点
-                                double cellCenterX = (cellMinX + cellMaxX) / 2.0;
-                                double cellCenterY = (cellMinY + cellMaxY) / 2.0;
-
-                                if (roi.contains(cellCenterX, cellCenterY) ||  // 中心点
-                                    roi.contains(cellCenterX, cellMinY) ||   // 上边中点
-                                    roi.contains(cellMaxX, cellCenterY) ||   // 右边中点
-                                    roi.contains(cellCenterX, cellMaxY) ||   // 下边中点
-                                    roi.contains(cellMinX, cellCenterY)) {   // 左边中点
-                                    cellInROI = true;
-                                }
-                            }
                         }
                     } catch (Exception e) {
                         // 异常处理：回退到中心点检测
