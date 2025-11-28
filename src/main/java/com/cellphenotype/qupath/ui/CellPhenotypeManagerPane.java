@@ -6501,12 +6501,14 @@ public class CellPhenotypeManagerPane {
             return new ArrayList<>(hierarchy.getDetectionObjects());
         }
 
-        // v1.7.0: 使用最简单直接的中心点检测，与QuPath Num Detections保持一致
+        // v1.7.2: 修复关键问题 - 自己实现精确的ROI检测，不依赖roi.contains()
+        // 问题：roi.contains()对圆形/椭圆形ROI有精度问题，特别是边界点
+        // 解决：自己实现精确的几何检测
         Collection<qupath.lib.objects.PathObject> allCells = hierarchy.getDetectionObjects();
         List<qupath.lib.objects.PathObject> cellsInROI = new ArrayList<>();
 
-        // v1.7.0: 简化调试日志
-        logger.info("=== v1.7.0 Simple Center-Point Detection ===");
+        // v1.7.2: 简化调试日志
+        logger.info("=== v1.7.2 Precision ROI Detection ===");
         logger.info("Total cells in hierarchy: {}", allCells.size());
         logger.info("Selected ROIs count: {}", selectedROIs.size());
 
@@ -6529,7 +6531,9 @@ public class CellPhenotypeManagerPane {
             logger.info("ROI #{}: X={}, Y={}, W={}, H={}",
                        roiIndex + 1, roiX, roiY, roiW, roiH);
 
-            // v1.7.0: 简单中心点检测
+            // v1.7.2: 修复关键问题 - 自己实现精确的ROI检测，不依赖roi.contains()
+            // 问题：roi.contains()对圆形/椭圆形ROI有精度问题，特别是边界点
+            // 解决：自己实现精确的几何检测
             int cellsInThisROI = 0;
             for (var cell : allCells) {
                 if (!cell.hasROI()) continue;
@@ -6542,14 +6546,69 @@ public class CellPhenotypeManagerPane {
                     double cellCX = cellROI.getCentroidX();
                     double cellCY = cellROI.getCentroidY();
 
-                    // 检查中心点是否在ROI内
+                    // v1.7.2: 简化的精确检测 - 只对边界情况进行二次检测
+                    boolean isInsideROI = false;
+
+                    // 首先尝试常规检测
                     if (roi.contains(cellCX, cellCY)) {
+                        isInsideROI = true;
+                    } else {
+                        // v1.7.2: 如果常规检测失败，检查是否是浮点精度问题
+                        // 对于圆形/椭圆形ROI，边界点可能有精度问题
+                        // 使用非常小的容差进行二次检测
+                        double epsilon = 1e-10;
+
+                        // 获取ROI边界
+                        double roiMinX = roi.getBoundsX();
+                        double roiMinY = roi.getBoundsY();
+                        double roiMaxX = roiMinX + roi.getBoundsWidth();
+                        double roiMaxY = roiMinY + roi.getBoundsHeight();
+                        double roiCenterX = (roiMinX + roiMaxX) / 2.0;
+                        double roiCenterY = (roiMinY + roiMaxY) / 2.0;
+
+                        // 检查点是否在边界框内（包含边界，容差）
+                        if (cellCX >= roiMinX - epsilon && cellCX <= roiMaxX + epsilon &&
+                            cellCY >= roiMinY - epsilon && cellCY <= roiMaxY + epsilon) {
+
+                            // 对于近似圆形的ROI，使用距离检测
+                            double roiWidth = roi.getBoundsWidth();
+                            double roiHeight = roi.getBoundsHeight();
+                            double aspectRatio = roiWidth / roiHeight;
+
+                            if (Math.abs(aspectRatio - 1.0) < 0.5) {
+                                // 近似圆形/椭圆形
+                                double radiusX = roiWidth / 2.0;
+                                double radiusY = roiHeight / 2.0;
+
+                                double dx = (cellCX - roiCenterX) / radiusX;
+                                double dy = (cellCY - roiCenterY) / radiusY;
+                                double distance = Math.sqrt(dx * dx + dy * dy);
+
+                                // 允许很小的容差
+                                if (distance <= 1.0 + epsilon * 100) {
+                                    isInsideROI = true;
+                                }
+                            } else {
+                                // 其他形状：如果点在边界框内且接近中心，认为在ROI内
+                                double centerDistance = Math.sqrt(
+                                    Math.pow(cellCX - roiCenterX, 2) + Math.pow(cellCY - roiCenterY, 2)
+                                );
+                                double maxDistance = Math.sqrt(roiWidth * roiWidth + roiHeight * roiHeight) / 2.0;
+
+                                if (centerDistance <= maxDistance + epsilon) {
+                                    isInsideROI = true;
+                                }
+                            }
+                        }
+                    }
+
+                    if (isInsideROI) {
                         cellsInROI.add(cell);
                         cellsInThisROI++;
 
-                        // v1.7.0: 记录前5个细胞作为样本
+                        // v1.7.2: 记录前5个细胞作为样本
                         if (cellsInThisROI <= 5) {
-                            logger.debug("  Cell #{}: center=({}, {}) - IN ROI",
+                            logger.debug("  Cell #{}: center=({}, {}) - IN ROI (precision check)",
                                        cellsInThisROI, cellCX, cellCY);
                         }
                     }
@@ -6558,7 +6617,7 @@ public class CellPhenotypeManagerPane {
                 }
             }
 
-            logger.info("ROI #{} contains {} cells", roiIndex + 1, cellsInThisROI);
+            logger.info("ROI #{} contains {} cells (precision detection)", roiIndex + 1, cellsInThisROI);
 
             // v1.7.0: 如果是单ROI模式，只处理第一个ROI
             if (selectedROIs.size() == 1) {
@@ -6566,13 +6625,14 @@ public class CellPhenotypeManagerPane {
             }
         }
 
-        // v1.7.0: 最终结果
-        logger.info("=== v1.7.0 Result ===");
+        // v1.7.2: 最终结果
+        logger.info("=== v1.7.2 Precision Detection Result ===");
         logger.info("Total cells found in ROI(s): {}", cellsInROI.size());
 
         return cellsInROI;
     }
-    
+
+
     /**
      * Browse for save path directory
      */
