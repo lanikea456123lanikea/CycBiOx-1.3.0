@@ -6515,43 +6515,77 @@ public class CellPhenotypeManagerPane {
             for (var roiObject : selectedROIs) {
                 var roi = roiObject.getROI();
                 if (roi != null && cellROI != null) {
-                    // v1.4.0修复: 使用更准确的圆形ROI包含判断
-                    // 方法: 检查细胞ROI的中心点和边界框
+                    // v1.4.1修复: 使用精确的圆形ROI包含判断
                     double cellX = cellROI.getCentroidX();
                     double cellY = cellROI.getCentroidY();
 
-                    // 1. 首先检查中心点
+                    // 1. 检查细胞中心点是否在ROI内
                     boolean centerInside = roi.contains(cellX, cellY);
 
-                    // 2. 如果中心点不在ROI内，检查细胞ROI的边界框是否与ROI相交
-                    boolean intersects = false;
-                    try {
-                        // 获取细胞的边界框
-                        double cellMinX = cellROI.getBoundsX();
-                        double cellMinY = cellROI.getBoundsY();
-                        double cellMaxX = cellMinX + cellROI.getBoundsWidth();
-                        double cellMaxY = cellMinY + cellROI.getBoundsHeight();
+                    // 2. 如果中心点不在ROI内，进行更精确的几何判断
+                    if (!centerInside) {
+                        try {
+                            // 获取细胞的边界框
+                            double cellMinX = cellROI.getBoundsX();
+                            double cellMinY = cellROI.getBoundsY();
+                            double cellMaxX = cellMinX + cellROI.getBoundsWidth();
+                            double cellMaxY = cellMinY + cellROI.getBoundsHeight();
 
-                        // 获取ROI的边界框
-                        double roiMinX = roi.getBoundsX();
-                        double roiMinY = roi.getBoundsY();
-                        double roiMaxX = roiMinX + roi.getBoundsWidth();
-                        double roiMaxY = roiMinY + roi.getBoundsHeight();
+                            // 获取ROI的边界框
+                            double roiMinX = roi.getBoundsX();
+                            double roiMinY = roi.getBoundsY();
+                            double roiMaxX = roiMinX + roi.getBoundsWidth();
+                            double roiMaxY = roiMinY + roi.getBoundsHeight();
 
-                        // AABB相交测试
-                        intersects = !(cellMaxX < roiMinX ||
-                                       cellMinX > roiMaxX ||
-                                       cellMaxY < roiMinY ||
-                                       cellMinY > roiMaxY);
-                    } catch (Exception e) {
-                        // 如果无法获取边界框，忽略相交检查
-                        intersects = false;
-                    }
+                            // AABB快速排除测试：如果边界框完全不相交，则跳过
+                            boolean aabbNoOverlap = (cellMaxX < roiMinX ||
+                                                     cellMinX > roiMaxX ||
+                                                     cellMaxY < roiMinY ||
+                                                     cellMinY > roiMaxY);
+                            if (aabbNoOverlap) {
+                                continue; // 边界框都不相交，直接跳过
+                            }
 
-                    // 3. 如果中心点在ROI内或边界框相交，则认为细胞在ROI内
-                    if (centerInside || intersects) {
+                            // 对于圆形ROI，计算细胞边界框的四个角点
+                            double[] cellCornersX = {cellMinX, cellMaxX, cellMinX, cellMaxX};
+                            double[] cellCornersY = {cellMinY, cellMinY, cellMaxY, cellMaxY};
+
+                            // 获取圆形ROI的中心和半径
+                            double roiCenterX = roi.getCentroidX();
+                            double roiCenterY = roi.getCentroidY();
+                            double roiRadius = roi.getBoundsWidth() / 2.0; // 假设是圆形ROI
+
+                            // 检查细胞边界框的四个角点是否在圆形内
+                            boolean anyCornerInside = false;
+                            for (int i = 0; i < 4; i++) {
+                                double cornerX = cellCornersX[i];
+                                double cornerY = cellCornersY[i];
+                                double distToCenter = Math.sqrt(
+                                    Math.pow(cornerX - roiCenterX, 2) +
+                                    Math.pow(cornerY - roiCenterY, 2)
+                                );
+                                if (distToCenter <= roiRadius) {
+                                    anyCornerInside = true;
+                                    break;
+                                }
+                            }
+
+                            // 如果任意角点在圆形内，认为细胞在ROI内
+                            if (anyCornerInside) {
+                                cellsInROI.add(cell);
+                                break;
+                            }
+                        } catch (Exception e) {
+                            // 如果出现异常，使用旧的简单方法
+                            if (centerInside) {
+                                cellsInROI.add(cell);
+                                break;
+                            }
+                        }
+                    } else {
+                        // 中心点在ROI内，直接添加
                         cellsInROI.add(cell);
-                        break; // Cell is in at least one selected ROI
+                        break;
                     }
                 }
             }
