@@ -6476,13 +6476,10 @@ public class CellPhenotypeManagerPane {
             statusLabel.setStyle("-fx-text-fill: #4CAF50; -fx-font-style: italic;");
         }
     }
-    
+
     /**
      * Get cells within currently selected ROI(s)
-     */
-    /**
-     * Get cells within currently selected ROI(s)
-     * v1.7.3: 直接使用QuPath原生的选择功能
+     * v1.7.4: 直接使用中心点检测（与QuPath Num Detections一致）
      */
     private List<qupath.lib.objects.PathObject> getCellsInSelectedROI(ImageData<?> imageData) {
         // Check if ROI mode is enabled via the cell analysis combo box
@@ -6494,97 +6491,75 @@ public class CellPhenotypeManagerPane {
 
         var hierarchy = imageData.getHierarchy();
 
-        // v1.7.3: 首先尝试直接使用QuPath原生的选择功能
-        // 当用户选择ROI时，QuPath会自动选中ROI内的所有细胞
+        // 获取用户当前选中的ROI对象
         var selectedObjects = hierarchy.getSelectionModel().getSelectedObjects();
-
-        logger.info("=== v1.7.3 Using QuPath Native Selection ===");
-        logger.info("Total selected objects: {}", selectedObjects.size());
-
-        // 获取所有选中的对象���，是细胞（detection）的那些
-        List<qupath.lib.objects.PathObject> selectedCells = selectedObjects.stream()
-            .filter(obj -> obj.hasROI() && obj.isDetection())
+        List<qupath.lib.objects.PathObject> selectedROIs = selectedObjects.stream()
+            .filter(obj -> obj.hasROI() && !obj.isDetection())
             .collect(Collectors.toList());
 
-        logger.info("Selected cells in ROI: {}", selectedCells.size());
-
-        // 记录前5个细胞作为样本
-        for (int i = 0; i < Math.min(5, selectedCells.size()); i++) {
-            var cell = selectedCells.get(i);
-            var cellROI = cell.getROI();
-            if (cellROI != null) {
-                logger.info("  Cell #{}: center=({}, {}) - Selected by QuPath",
-                           i + 1, cellROI.getCentroidX(), cellROI.getCentroidY());
-            }
+        if (selectedROIs.isEmpty()) {
+            logger.warn("ROI mode enabled but no ROI selected. Processing all cells.");
+            return new ArrayList<>(hierarchy.getDetectionObjects());
         }
 
-        // v1.7.3: 如果QuPath没有自动选中细胞（比如只选了ROI对象），
-        // 则需要让QuPath手动筛选一下
-        if (selectedCells.isEmpty()) {
-            logger.info("No cells auto-selected by QuPath, falling back to manual detection");
-            
-            // 获取选中的ROI对象
-            List<qupath.lib.objects.PathObject> selectedROIs = selectedObjects.stream()
-                .filter(obj -> obj.hasROI() && !obj.isDetection())
-                .collect(Collectors.toList());
+        // 获取所有细胞
+        List<qupath.lib.objects.PathObject> allCells = new ArrayList<>(hierarchy.getDetectionObjects());
+        List<qupath.lib.objects.PathObject> cellsInROI = new ArrayList<>();
 
-            if (!selectedROIs.isEmpty()) {
-                logger.info("Number of selected ROIs: {}", selectedROIs.size());
+        logger.info("=== v1.7.4 Direct Center-Point Detection ===");
+        logger.info("Total cells in hierarchy: {}", allCells.size());
+        logger.info("Number of selected ROIs: {}", selectedROIs.size());
 
-                // 回退到手动检测逻辑（简化版）
-                List<qupath.lib.objects.PathObject> allCells = new ArrayList<>(hierarchy.getDetectionObjects());
-                List<qupath.lib.objects.PathObject> cellsInROI = new ArrayList<>();
+        // 对每个ROI，逐个检查所有细胞
+        for (var roiObject : selectedROIs) {
+            var roi = roiObject.getROI();
+            if (roi == null) continue;
 
-                for (var roiObject : selectedROIs) {
-                    var roi = roiObject.getROI();
-                    if (roi == null) continue;
+            double roiX = roi.getBoundsX();
+            double roiY = roi.getBoundsY();
+            double roiW = roi.getBoundsWidth();
+            double roiH = roi.getBoundsHeight();
 
-                    double roiX = roi.getBoundsX();
-                    double roiY = roi.getBoundsY();
-                    double roiW = roi.getBoundsWidth();
-                    double roiH = roi.getBoundsHeight();
+            logger.info("ROI: X={}, Y={}, W={}, H={}", roiX, roiY, roiW, roiH);
 
-                    logger.info("ROI: X={}, Y={}, W={}, H={}", roiX, roiY, roiW, roiH);
+            int cellsInThisROI = 0;
+            // 遍历所有细胞，检查中心点是否在ROI内
+            for (var cell : allCells) {
+                if (!cell.hasROI()) continue;
 
-                    int cellsInThisROI = 0;
-                    for (var cell : allCells) {
-                        if (!cell.hasROI()) continue;
+                var cellROI = cell.getROI();
+                if (cellROI == null) continue;
 
-                        var cellROI = cell.getROI();
-                        if (cellROI == null) continue;
+                // 获取细胞中心点
+                double cellCX = cellROI.getCentroidX();
+                double cellCY = cellROI.getCentroidY();
 
-                        // v1.7.3: 使���简化的中心点检测
-                        double cellCX = cellROI.getCentroidX();
-                        double cellCY = cellROI.getCentroidY();
+                // 使用roi.contains()检查中心点（与QuPath Num Detections一致）
+                if (roi.contains(cellCX, cellCY)) {
+                    cellsInROI.add(cell);
+                    cellsInThisROI++;
 
-                        // 首先尝试常规检测
-                        if (roi.contains(cellCX, cellCY)) {
-                            cellsInROI.add(cell);
-                            cellsInThisROI++;
-
-                            if (cellsInThisROI <= 5) {
-                                logger.info("  Cell #{}: center=({}, {}) - IN ROI",
-                                           cellsInThisROI, cellCX, cellCY);
-                            }
-                        }
+                    // 记录前5个细胞作为样本
+                    if (cellsInThisROI <= 5) {
+                        logger.info("  Cell #{}: center=({}, {}) - IN ROI",
+                                   cellsInThisROI, cellCX, cellCY);
                     }
-
-                    logger.info("ROI contains {} cells", cellsInThisROI);
                 }
+            }
 
-                logger.info("=== v1.7.3 Fallback Result ===");
-                logger.info("Total cells found in ROI(s): {}", cellsInROI.size());
-
-                return cellsInROI;
+            logger.info("ROI contains {} cells", cellsInThisROI);
+            
+            // 如果只有一个ROI，提前结束（避免重复计算）
+            if (selectedROIs.size() == 1) {
+                break;
             }
         }
 
-        logger.info("=== v1.7.3 Result ===");
-        logger.info("Total cells found in ROI(s): {}", selectedCells.size());
+        logger.info("=== v1.7.4 Result ===");
+        logger.info("Total cells found in ROI(s): {}", cellsInROI.size());
 
-        return selectedCells;
+        return cellsInROI;
     }
-
 
     /**
      * Browse for save path directory
@@ -6600,9 +6575,6 @@ public class CellPhenotypeManagerPane {
         }
     }
 
-    /**
-     * 更新按钮状态根据当前操作模式
-     */
     private void updateButtonStates() {
         if (executeButton != null) {
             // Create模式下，执行策略不可点击
