@@ -6548,83 +6548,150 @@ public class CellPhenotypeManagerPane {
                         intersects = false;
                     }
 
-                    // 3. 如果中心点在ROI内，进行更精确的检测
-                    if (centerInside) {
-                        // v1.4.4: 密集网格采样方法 - 使用5x5网格（25个点）进行最精确的ROI检测
-                        // 适用于圆形ROI等复杂形状，避免边缘细胞误判
-                        boolean anyPointInside = false;
-                        int gridSize = 5; // 5x5网格，25个采样点
+                    // 3. v1.4.5: 全方面几何区域相交检测
+                    // Diamond形状检测 + 精确几何算法
+                    boolean cellInROI = false;
+
+                    try {
+                        // 获取细胞和ROI的边界框
+                        double cellMinX = cellROI.getBoundsX();
+                        double cellMinY = cellROI.getBoundsY();
+                        double cellMaxX = cellMinX + cellROI.getBoundsWidth();
+                        double cellMaxY = cellMinY + cellROI.getBoundsHeight();
+                        double cellCenterX = (cellMinX + cellMaxX) / 2.0;
+                        double cellCenterY = (cellMinY + cellMaxY) / 2.0;
+
+                        double roiMinX = roi.getBoundsX();
+                        double roiMinY = roi.getBoundsY();
+                        double roiMaxX = roiMinX + roi.getBoundsWidth();
+                        double roiMaxY = roiMinY + roi.getBoundsHeight();
+                        double roiCenterX = (roiMinX + roiMaxX) / 2.0;
+                        double roiCenterY = (roiMinY + roiMaxY) / 2.0;
+
+                        // 检测ROI类型，使用对应的精确算法
+                        boolean isROICircular = false;
                         try {
-                            // 获取细胞的边界框
-                            double cellMinX = cellROI.getBoundsX();
-                            double cellMinY = cellROI.getBoundsY();
-                            double cellMaxX = cellMinX + cellROI.getBoundsWidth();
-                            double cellMaxY = cellMinY + cellROI.getBoundsHeight();
+                            // 尝试检测是否为圆形ROI
+                            double roiWidth = roi.getBoundsWidth();
+                            double roiHeight = roi.getBoundsHeight();
+                            // 如果宽高比接近1认为是圆形（允许5%误差）
+                            isROICircular = Math.abs(roiWidth - roiHeight) / Math.max(roiWidth, roiHeight) < 0.05;
+                        } catch (Exception e) {
+                            isROICircular = false;
+                        }
 
-                            // 在边界框内进行5x5网格采样
-                            for (int i = 0; i < gridSize; i++) {
-                                for (int j = 0; j < gridSize; j++) {
-                                    // 计算采样点坐标（均匀分布）
-                                    double pointX = cellMinX + (cellMaxX - cellMinX) * i / (gridSize - 1);
-                                    double pointY = cellMinY + (cellMaxY - cellMinY) * j / (gridSize - 1);
+                        if (isROICircular) {
+                            // 圆形ROI: 使用精确的圆心距离检测
+                            double roiRadius = Math.min(roi.getBoundsWidth(), roi.getBoundsHeight()) / 2.0;
+                            // 估算细胞ROI的等效半径
+                            double cellRadius = Math.min(cellROI.getBoundsWidth(), cellROI.getBoundsHeight()) / 2.0;
 
-                                    // 检查采样点是否在ROI内
-                                    if (roi.contains(pointX, pointY)) {
-                                        anyPointInside = true;
-                                        break;
-                                    }
-                                }
-                                if (anyPointInside) {
+                            // 计算两个圆心的距离
+                            double distanceBetweenCenters = Math.sqrt(
+                                Math.pow(cellCenterX - roiCenterX, 2) +
+                                Math.pow(cellCenterY - roiCenterY, 2)
+                            );
+
+                            // 如果两个圆相交（包括相切），则认为细胞在ROI内
+                            if (distanceBetweenCenters <= (roiRadius + cellRadius)) {
+                                cellInROI = true;
+                            }
+                        }
+
+                        // 如果不是圆形ROI或者圆形检测未命中，使用Diamond形状检测
+                        if (!cellInROI) {
+                            // Diamond形状检测：9个关键点
+                            // 1. 中心点
+                            // 2. 四个边的中点
+                            // 3. 四个角的1/2处点
+                            double cellWidth = cellMaxX - cellMinX;
+                            double cellHeight = cellMaxY - cellMinY;
+
+                            // Diamond 9点采样
+                            boolean[] diamondPoints = new boolean[9];
+                            int pointIndex = 0;
+
+                            // 点1: 中心
+                            diamondPoints[pointIndex++] = roi.contains(cellCenterX, cellCenterY);
+
+                            // 点2-5: 四个边的中点
+                            diamondPoints[pointIndex++] = roi.contains(cellCenterX, cellMinY); // 上边中点
+                            diamondPoints[pointIndex++] = roi.contains(cellMaxX, cellCenterY); // 右边中点
+                            diamondPoints[pointIndex++] = roi.contains(cellCenterX, cellMaxY); // 下边中点
+                            diamondPoints[pointIndex++] = roi.contains(cellMinX, cellCenterY); // 左边中点
+
+                            // 点6-9: 四个角点
+                            diamondPoints[pointIndex++] = roi.contains(cellMinX, cellMinY); // 左上角
+                            diamondPoints[pointIndex++] = roi.contains(cellMaxX, cellMinY); // 右上角
+                            diamondPoints[pointIndex++] = roi.contains(cellMaxX, cellMaxY); // 右下角
+                            diamondPoints[pointIndex++] = roi.contains(cellMinX, cellMaxY); // 左下角
+
+                            // 如果有任何Diamond点在ROI内，则认为细胞在ROI内
+                            for (boolean pointInside : diamondPoints) {
+                                if (pointInside) {
+                                    cellInROI = true;
                                     break;
                                 }
                             }
-                        } catch (Exception e) {
-                            // 如果网格采样失败，回退到中心点检测
-                            anyPointInside = true;
                         }
 
-                        if (anyPointInside) {
-                            cellsInROI.add(cell);
-                            break; // Cell is in at least one selected ROI
-                        }
-                    } else if (intersects) {
-                        // v1.4.4: 边界框相交的情况也需要密集网格采样确认
-                        boolean anyPointInside = false;
-                        int gridSize = 5; // 5x5网格，25个采样点
-                        try {
-                            // 获取细胞的边界框
-                            double cellMinX = cellROI.getBoundsX();
-                            double cellMinY = cellROI.getBoundsY();
-                            double cellMaxX = cellMinX + cellROI.getBoundsWidth();
-                            double cellMaxY = cellMinY + cellROI.getBoundsHeight();
+                        // 如果Diamond检测未命中，使用更密集的Edge采样
+                        if (!cellInROI) {
+                            // 边缘采样：在细胞ROI的边界上进行密集采样
+                            boolean anyEdgePointInside = false;
 
-                            // 在边界框内进行5x5网格采样
-                            for (int i = 0; i < gridSize; i++) {
-                                for (int j = 0; j < gridSize; j++) {
-                                    // 计算采样点坐标（均匀分布）
-                                    double pointX = cellMinX + (cellMaxX - cellMinX) * i / (gridSize - 1);
-                                    double pointY = cellMinY + (cellMaxY - cellMinY) * j / (gridSize - 1);
+                            // 计算细胞ROI的尺寸
+                            double cellWidth = cellMaxX - cellMinX;
+                            double cellHeight = cellMaxY - cellMinY;
 
-                                    // 检查采样点是否在ROI内
-                                    if (roi.contains(pointX, pointY)) {
-                                        anyPointInside = true;
-                                        break;
-                                    }
+                            // 在细胞ROI的边界上采样20个点
+                            int edgeSamples = 20;
+                            for (int s = 0; s <= edgeSamples; s++) {
+                                double t = (double) s / edgeSamples;
+
+                                // 采样边界点（顺时针）
+                                double edgePointX, edgePointY;
+
+                                if (s <= edgeSamples / 4) {
+                                    // 上边：从左上到右上
+                                    edgePointX = cellMinX + cellWidth * t;
+                                    edgePointY = cellMinY;
+                                } else if (s <= edgeSamples / 2) {
+                                    // 右边：从右上到右下
+                                    edgePointX = cellMaxX;
+                                    edgePointY = cellMinY + cellHeight * (t - 0.25) * 4;
+                                } else if (s <= 3 * edgeSamples / 4) {
+                                    // 下边：从右下到左下
+                                    edgePointX = cellMaxX - cellWidth * (t - 0.5) * 4;
+                                    edgePointY = cellMaxY;
+                                } else {
+                                    // 左边：从左下到左上
+                                    edgePointX = cellMinX;
+                                    edgePointY = cellMaxY - cellHeight * (t - 0.75) * 4;
                                 }
-                                if (anyPointInside) {
+
+                                if (roi.contains(edgePointX, edgePointY)) {
+                                    anyEdgePointInside = true;
                                     break;
                                 }
                             }
-                        } catch (Exception e) {
-                            // 如果无法进行网格采样，使用简单的相交判断
-                            anyPointInside = intersects;
+
+                            if (anyEdgePointInside) {
+                                cellInROI = true;
+                            }
                         }
 
-                        if (anyPointInside) {
-                            cellsInROI.add(cell);
-                            break; // Cell is in at least one selected ROI
-                        }
+                    } catch (Exception e) {
+                        // 如果所有精确检测都失败，回退到中心点检测
+                        logger.warn("精确ROI检测失败，回退到中心点检测: {}", e.getMessage());
+                        cellInROI = centerInside || intersects;
                     }
+
+                    if (cellInROI) {
+                        cellsInROI.add(cell);
+                        break; // Cell is in at least one selected ROI
+                    }
+
                 }
             }
         }
