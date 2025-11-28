@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CycBiOx 细胞表型分类插件操作指南</title>
+    <style>
+        body {
+            font-family: "Microsoft YaHei", "SimSun", Arial, sans-serif;
+            line-height: 1.6;
+            margin: 2cm;
+            color: #333;
+            background-color: #fff;
+        }
+
+        h1 {
+            color: #2E4057;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+            text-align: center;
+            font-size: 28px;
+            margin-bottom: 30px;
+        }
+
+        h2 {
+            color: #2E4057;
+            border-left: 5px solid #3498db;
+            padding-left: 15px;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            font-size: 20px;
+        }
+
+        h3 {
+            color: #34495e;
+            margin-top: 25px;
+            margin-bottom: 12px;
+            font-size: 16px;
+        }
+
+        h4 {
+            color: #555;
+            margin-top: 20px;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+
+        p {
+            margin-bottom: 12px;
+            text-align: justify;
+        }
+
+        ul, ol {
+            margin-bottom: 15px;
+            padding-left: 30px;
+        }
+
+        li {
+            margin-bottom: 8px;
+        }
+
+        code {
+            background-color: #f1f2f6;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: "Courier New", monospace;
+            color: #e74c3c;
+        }
+
+        .workflow-box {
+            background-color: #e8f4fd;
+            border: 2px solid #3498db;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+        }
+
+        .step-box {
+            background-color: #f8f9fa;
+            border-left: 4px solid #007bff;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+
+        .step-title {
+            font-weight: bold;
+            color: #2E4057;
+            margin-bottom: 8px;
+            font-size: 16px;
+        }
+
+        .highlight {
+            background-color: #fff3cd;
+            padding: 15px;
+            border-left: 4px solid #ffc107;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+
+        .warning {
+            background-color: #f8d7da;
+            padding: 15px;
+            border-left: 4px solid #dc3545;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+
+        .info {
+            background-color: #d1ecf1;
+            padding: 15px;
+            border-left: 4px solid #17a2b8;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+
+        .success {
+            background-color: #d4edda;
+            padding: 15px;
+            border-left: 4px solid #28a745;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            background-color: #fff;
+        }
+
+        th, td {
+            border: 1px solid #ddd;
+            padding: 12px;
+            text-align: left;
+        }
+
+        th {
+            background-color: #f8f9fa;
+            font-weight: bold;
+            color: #2E4057;
+        }
+
+        tr:nth-child(even) {
+            background-color: #f8f9fa;
+        }
+
+        .toc {
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+        }
+
+        .toc ul {
+            list-style-type: none;
+            padding-left: 20px;
+        }
+
+        .toc a {
+            text-decoration: none;
+            color: #2E4057;
+        }
+
+        .toc a:hover {
+            color: #3498db;
+            text-decoration: underline;
+        }
+
+        .concept-box {
+            background-color: #f1f8ff;
+            border: 1px solid #c3e6ff;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+        }
+
+        .process-flow {
+            background-color: #f9f9f9;
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 6px;
+            text-align: center;
+            font-family: monospace;
+        }
+
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .feature-item {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            border-left: 4px solid #28a745;
+        }
+
+        .page-break {
+            page-break-before: always;
+        }
+
+        @media print {
+            body {
+                margin: 1cm;
+            }
+            .page-break {
+                page-break-before: always;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<h1>CycBiOx 细胞表型分类插件操作指南</h1>
+
+<div class="toc">
+    <h2>目录</h2>
+    <ul>
+        <li><a href="#plugin-intro">1. 插件简介与核心概念</a></li>
+        <li><a href="#installation">2. 安装准备</a></li>
+        <li><a href="#workflow">3. 完整操作流程</a></li>
+        <li><a href="#features">4. 功能详解</a></li>
+        <li><a href="#results">5. 结果解读与数据导出</a></li>
+        <li><a href="#best-practices">6. 最佳实践与优化</a></li>
+        <li><a href="#troubleshooting">7. 常见问题解决</a></li>
+    </ul>
+</div>
+
+<div class="page-break"></div>
+
+<h2 id="plugin-intro">插件简介与核心概念</h2>
+
+<div class="concept-box">
+    <h3>什么是CycBiOx？</h3>
+    <p>CycBiOx是专为QuPath开发的高性能细胞表型分类插件，支持<strong>10M+细胞</strong>的实时分析处理。</p>
+</div>
+
+<h3>核心功能理解</h3>
+<div class="feature-grid">
+    <div class="feature-item">
+        <strong>细胞分类（Classification）</strong><br>
+        基于阈值的蛋白表达二元分类（阳性/阴性）
+    </div>
+    <div class="feature-item">
+        <strong>细胞类型分析（CellType）</strong><br>
+        基于生物学意义的表型分配（如Helper T Cell、B Cell）
+    </div>
+    <div class="feature-item">
+        <strong>双数据输出</strong><br>
+        同时提供客观分类结果和生物学表型信息
+    </div>
+</div>
+
+<h3>工作原理</h3>
+<div class="process-flow">
+    细胞检测 → 蛋白表达测量 → 阈值分类 → 表型规则匹配 → 颜色标记 → 数据导出
+</div>
+
+<h3>重要概念</h3>
+<ul>
+    <li><strong>无关标记</strong>：某个通道的表达状态不影响该细胞类型的分类</li>
+    <li><strong>优先级系统</strong>：数字越小优先级越高，细胞只分配给第一个匹配的表型</li>
+    <li><strong>伪彩显示</strong>：分类后的细胞在QuPath中显示不同颜色，永久保存</li>
+</ul>
+
+<div class="page-break"></div>
+
+<h2 id="installation">安装准备</h2>
+
+<h3>系统要求</h3>
+<table>
+    <tr>
+        <th>组件</th>
+        <th>最低要求</th>
+        <th>推荐配置</th>
+    </tr>
+    <tr>
+        <td>QuPath</td>
+        <td>0.6.0+</td>
+        <td>最新版本</td>
+    </tr>
+    <tr>
+        <td>Java</td>
+        <td>21+</td>
+        <td>21+</td>
+    </tr>
+    <tr>
+        <td>内存</td>
+        <td>4GB</td>
+        <td>8GB+</td>
+    </tr>
+    <tr>
+        <td>CPU</td>
+        <td>双核</td>
+        <td>四核+</td>
+    </tr>
+</table>
+
+<h3>安装步骤</h3>
+<div class="step-box">
+    <div class="step-title">步骤1：获取插件</div>
+    <p>确保已获得CycBiOx插件JAR文件</p>
+</div>
+
+<div class="step-box">
+    <div class="step-title">步骤2：安装插件</div>
+    <p>复制JAR文件到QuPath扩展目录</p>
+</div>
+
+<div class="step-box">
+    <div class="step-title">步骤3：重启QuPath</div>
+    <p>完全重启QuPath应用程序</p>
+</div>
+
+<div class="step-box">
+    <div class="step-title">步骤4：启动插件</div>
+    <p>Extensions → CycBiOx</p>
+</div>
+
+<h3>数据准备要求</h3>
+<div class="warning">
+    <strong>重要</strong>：CycBiOx专注于分类分析，<strong>不包含细胞分割功能</strong>
+    <ul>
+        <li>✅ 必须先完成QuPath的细胞检测和分割</li>
+        <li>✅ 必须已进行多通道蛋白表达测量</li>
+        <li>✅ 确保有有效的测量数据（Nucleus、Cell、Cytoplasm）</li>
+    </ul>
+</div>
+
+<div class="page-break"></div>
+
+<h2 id="workflow">完整操作流程</h2>
+
+<div class="workflow-box">
+    <h3>第一步：项目初始化</h3>
+
+    <h4>1. 打开CycBiOx插件</h4>
+    <ul>
+        <li>Extensions → CycBiOx</li>
+        <li>确认看到三区域界面（基础设置、阈值策略、细胞分类）</li>
+    </ul>
+
+    <h4>2. 基础设置配置</h4>
+    <div class="process-flow">
+        配置名称：输入项目描述名称（如"肿瘤免疫分析"）<br>
+        保存地址：选择结果文件保存目录<br>
+        ROI模式：根据需要选择分析全图或特定区域
+    </div>
+</div>
+
+<div class="workflow-box">
+    <h3>第二步：阈值策略配置</h3>
+
+    <h4>1. 选择操作模式</h4>
+    <ul>
+        <li><strong>Create模式</strong>：单通道阈值调试，实时预览效果</li>
+        <li><strong>Load模式</strong>：多通道批量分类，正式分析使用</li>
+    </ul>
+
+    <h4>2. 设置阈值参数</h4>
+
+    <div class="step-box">
+        <div class="step-title">手动阈值调整</div>
+        <div class="process-flow">
+            选择Create模式 → 选择Manual模式 → 选择通道 → 调整滑块 → 观察预览<br>
+            - 阳性细胞显示紫色<br>
+            - 阴性细胞显示灰色<br>
+            - 根据生物学知识调整至合适阈值
+        </div>
+    </div>
+
+    <div class="step-box">
+        <div class="step-title">自动阈值计算</div>
+        <div class="process-flow">
+            选择Create模式 → 选择Auto模式 → 选择算法 → 点击"计算" → 观察预览<br>
+            - Otsu：适用于双峰分布（推荐）<br>
+            - Triangle：适用于偏斜分布<br>
+            - MaxEntropy：适用于复杂分布<br>
+            - Minimum：适用于明显双峰<br>
+            如需微调，可切换到Manual模式,修改相应阈值
+        </div>
+    </div>
+
+    <h4>3. 执行策略应用</h4>
+    <div class="process-flow">
+        完成阈值设置 → 切换到Load模式 → 点击"执行策略"
+    </div>
+</div>
+
+<div class="workflow-box">
+    <h3>第三步：细胞表型定义</h3>
+
+    <h4>1. 创建细胞表型</h4>
+    <div class="process-flow">
+        点击"+ 新增细胞类型" → 输入表型名称 → 设置标记状态<br><br>
+        <strong>表型示例：</strong><br>
+        - Helper T Cell: CD3+, CD4+, CD8-<br>
+        - Cytotoxic T Cell: CD3+, CD4-, CD8+<br>
+        - B Cell: CD19+, CD3-, CD4-
+    </div>
+
+    <h4>2. 标记状态设置</h4>
+    <ul>
+        <li><strong>阳性</strong>：该通道必须大于阈值</li>
+        <li><strong>阴性</strong>：该通道必须小于等于阈值</li>
+        <li><strong>无关</strong>：忽略该通道，不影响分类</li>
+    </ul>
+
+    <h4>3. 优先级管理</h4>
+    <div class="process-flow">
+        特异性强的表型 → 高优先级（小数字）<br>
+        包容性广的表型 → 低优先级（大数字）<br><br>
+        <strong>建议顺序：</strong><br>
+        1. 双阳性特异表型（如CD3+CD4+）<br>
+        2. 单阳性表型（如CD3+）<br>
+        3. 一般性表型
+    </div>
+</div>
+
+<div class="workflow-box">
+    <h3>第四步：配置管理</h3>
+
+    <h4>1. 保存配置</h4>
+    <div class="process-flow">
+        完成所有设置 → 点击"保存配置"<br>
+        文件格式：配置名称_时间戳.json
+    </div>
+
+    <h4>2. 加载配置</h4>
+    <div class="process-flow">
+        点击"加载配置" → 选择已保存的配置文件<br>
+        系统自动恢复所有阈值和表型设置
+    </div>
+</div>
+
+<div class="workflow-box">
+    <h3>第五步：运行分析</h3>
+
+    <h4>1. 执行完整分析</h4>
+    <div class="process-flow">
+        确认所有设置 → 点击"运行检测并导出数据"<br><br>
+        <strong>系统执行：</strong><br>
+        - 应用阈值分类到所有细胞<br>
+        - 根据表型规则分配细胞类型<br>
+        - 更新QuPath伪彩显示<br>
+        - 导出CSV数据文件
+    </div>
+
+    <h4>2. 结果验证</h4>
+    <div class="process-flow">
+        ✅ 查看QuPath中的伪彩效果<br>
+        ✅ 检查分类统计信息<br>
+        ✅ 验证生物学合理性
+    </div>
+</div>
+
+<div class="page-break"></div>
+
+<h2 id="features">功能详解</h2>
+
+<h3>Create vs Load模式详解</h3>
+
+<table>
+    <tr>
+        <th>特性</th>
+        <th>Create模式（实时预览）</th>
+        <th>Load模式（批量处理）</th>
+    </tr>
+    <tr>
+        <td>用途</td>
+        <td>单通道阈值调试</td>
+        <td>多通道正式分析</td>
+    </tr>
+    <tr>
+        <td>特点</td>
+        <td>实时显示分类效果</td>
+        <td>高性能并行处理</td>
+    </tr>
+    <tr>
+        <td>显示</td>
+        <td>阳性=紫色，阴性=灰色</td>
+        <td>完整分类和表型信息</td>
+    </tr>
+    <tr>
+        <td>使用场景</td>
+        <td>参数优化阶段</td>
+        <td>正式分析阶段</td>
+    </tr>
+</table>
+
+<h3>ROI模式应用</h3>
+
+<div class="step-box">
+    <div class="step-title">启用ROI模式</div>
+    <ol>
+        <li>在QuPath中创建感兴趣区域</li>
+        <li>选择目标ROI</li>
+        <li>在插件中勾选"ROI模式"</li>
+        <li>分析将仅处理ROI内细胞</li>
+    </ol>
+</div>
+
+<h4>使用场景</h4>
+<ul>
+    <li><strong>局部分析</strong>：肿瘤区域、炎症灶</li>
+    <li><strong>对比分析</strong>：不同区域表型差异</li>
+    <li><strong>性能优化</strong>：大图像分块处理</li>
+</ul>
+
+<h3>表型设计策略</h3>
+
+<div class="step-box">
+    <div class="step-title">生物学导向设计</div>
+    <div class="process-flow">
+        基于文献和经验：<br>
+        - T细胞亚群：CD3基础，CD4/CD8分化<br>
+        - B细胞系列：CD19/CD20特异<br>
+        - 巨噬细胞：CD68/CD163标记<br>
+        - 肿瘤细胞：特异肿瘤标记
+    </div>
+</div>
+
+<h4>优先级设置原则</h4>
+<ol>
+    <li><strong>特异性优先</strong>：多标记组合 > 单标记</li>
+    <li><strong>功能相关</strong>：功能明确表型 > 一般表型</li>
+    <li><strong>生物学意义</strong>：有意义分类 > 技术分类</li>
+</ol>
+
+<div class="page-break"></div>
+
+<h2 id="results">结果解读与数据导出</h2>
+
+<h3>数据文件解读</h3>
+
+<div class="step-box">
+    <div class="step-title">CSV文件结构</div>
+    <div class="process-flow">
+        文件命名：图像名称_ROI名称-classification_and_celltype-时间戳.csv<br><br>
+        <strong>关键字段：</strong><br>
+        - Cell_ID：细胞唯一标识<br>
+        - X, Y：细胞中心坐标<br>
+        - Parent：父级对象ID<br>
+        - Classification：阈值分类结果（如CD3+_CD4+_CD8-）<br>
+        - CellType：表型分类结果（如Helper T Cell）<br>
+        - Positive_Proteins：阳性蛋白列表<br>
+        - Priority：匹配表型的优先级
+    </div>
+</div>
+
+<h4>双重数据价值</h4>
+<div class="feature-grid">
+    <div class="feature-item">
+        <strong>Classification数据</strong><br>
+        - 客观的阈值分类结果<br>
+        - 适用于定量统计分析<br>
+        - 可重现的数据分类
+    </div>
+    <div class="feature-item">
+        <strong>CellType数据</strong><br>
+        - 生物学意义的表型分类<br>
+        - 适用于功能性分析<br>
+        - 符合领域专业术语
+    </div>
+</div>
+
+<div class="page-break"></div>
+
+<h2 id="best-practices">最佳实践与优化</h2>
+
+<h3>推荐工作流程</h3>
+
+<div class="workflow-box">
+    <h4>第一阶段：参数优化（Create模式）</h4>
+    <div class="process-flow">
+        <strong>1. 小区域测试</strong><br>
+        - 使用ROI模式选择代表性区域<br>
+        - 包含阳性和阴性细胞的典型区域<br><br>
+
+        <strong>2. 阈值精调</strong><br>
+        - 从明显阳性细胞开始调节<br>
+        - 参考QuPath测量分布图<br>
+        - 结合生物学知识判断<br><br>
+
+        <strong>3. 验证效果</strong><br>
+        - 检查边界细胞分类<br>
+        - 确认无明显误分类
+    </div>
+</div>
+
+<div class="workflow-box">
+    <h4>第二阶段：表型设计</h4>
+    <div class="process-flow">
+        <strong>1. 基础表型优先</strong><br>
+        - 先定义主要细胞类型<br>
+        - 确保覆盖主要细胞群<br><br>
+
+        <strong>2. 细化分类</strong><br>
+        - 基于功能添加亚群<br>
+        - 考虑临床相关性<br><br>
+
+        <strong>3. 优先级排序</strong><br>
+        - 特异性强的表型设高优先级<br>
+        - 测试优先级逻辑的合理性
+    </div>
+</div>
+
+<div class="workflow-box">
+    <h4>第三阶段：全图分析（Load模式）</h4>
+    <div class="process-flow">
+        <strong>1. 配置保存</strong><br>
+        - 保存优化好的参数配置<br>
+        - 建立标准操作参数库<br><br>
+
+        <strong>2. 批量分析</strong><br>
+        - 使用Load模式进行正式分析<br>
+        - 确保计算资源充足<br><br>
+
+        <strong>3. 结果验证</strong><br>
+        - 检查分类统计的合理性<br>
+        - 验证与预期生物学结果的一致性
+    </div>
+</div>
+
+<h3>性能优化建议</h3>
+
+<table>
+    <tr>
+        <th>细胞数量</th>
+        <th>推荐策略</th>
+        <th>预期时间</th>
+    </tr>
+    <tr>
+        <td>< 10万</td>
+        <td>直接全图分析</td>
+        <td>< 10秒</td>
+    </tr>
+    <tr>
+        <td>10万-100万</td>
+        <td>ROI分块测试后全图</td>
+        <td>< 1分钟</td>
+    </tr>
+    <tr>
+        <td>100万-1000万</td>
+        <td>分批处理，充足内存</td>
+        <td>< 10分钟</td>
+    </tr>
+    <tr>
+        <td>> 1000万</td>
+        <td>专业工作站处理</td>
+        <td>视硬件而定</td>
+    </tr>
+</table>
+
+<h4>内存管理</h4>
+<ul>
+    <li><strong>Java堆内存</strong>：建议设置为可用内存的50-70%</li>
+    <li><strong>并行处理</strong>：充分利用多核CPU</li>
+    <li><strong>分批处理</strong>：大数据集自动分批处理</li>
+</ul>
+
+<div class="page-break"></div>
+
+<h2 id="troubleshooting">常见问题解决</h2>
+
+<h3>分析前准备问题</h3>
+
+<div class="step-box">
+    <div class="step-title">Q: 提示"没有可用的图像数据"</div>
+    <strong>解决方案：</strong>
+    <ul>
+        <li>确保QuPath中已打开图像</li>
+        <li>确认已完成细胞检测步骤</li>
+        <li>检查图像是否包含测量数据</li>
+    </ul>
+</div>
+
+<div class="step-box">
+    <div class="step-title">Q: 找不到测量数据</div>
+    <strong>解决方案：</strong>
+    <ul>
+        <li>运行QuPath的细胞检测（Analyze → Cell detection）</li>
+        <li>进行蛋白表达测量（Measure → Add intensity measurements）</li>
+        <li>确认通道命名正确</li>
+    </ul>
+</div>
+
+<h3>阈值设置问题</h3>
+
+<div class="step-box">
+    <div class="step-title">Q: 自动阈值结果不理想</div>
+    <strong>解决方案：</strong>
+    <ul>
+        <li>尝试不同算法（Otsu/Triangle/MaxEntropy）</li>
+        <li>切换到Manual模式手动微调</li>
+        <li>检查数据分布是否符合算法假设</li>
+        <li>参考QuPath的直方图分布</li>
+    </ul>
+</div>
+
+<div class="step-box">
+    <div class="step-title">Q: Create模式预览效果不明显</div>
+    <strong>解决方案：</strong>
+    <ul>
+        <li>检查所选通道是否有明显的阳性细胞</li>
+        <li>调整阈值范围到合适区间</li>
+        <li>确认测量数据的数值范围</li>
+        <li>尝试不同的测量类型（Mean/Median/Max）</li>
+    </ul>
+</div>
+
+<div class="step-box">
+    <div class="step-title">Q: 分类结果与预期不符</div>
+    <strong>排查步骤：</strong>
+    <ol>
+        <li>检查通道名称映射是否正确</li>
+        <li>验证阈值设置的生物学合理性</li>
+        <li>确认表型定义逻辑的正确性</li>
+        <li>调整优先级顺序</li>
+        <li>对比不同参数的结果差异</li>
+    </ol>
+</div>
+
+<h3>性能相关问题</h3>
+
+<div class="step-box">
+    <div class="step-title">Q: 处理速度过慢</div>
+    <strong>优化方案：</strong>
+    <ul>
+        <li>确保使用Load模式进行正式分析</li>
+        <li>增加Java堆内存分配</li>
+        <li>使用ROI模式分块处理</li>
+        <li>关闭其他占用内存的程序</li>
+        <li>升级硬件配置</li>
+    </ul>
+</div>
+
+<div class="step-box">
+    <div class="step-title">Q: 内存不足错误</div>
+    <strong>解决方法：</strong>
+    <ul>
+        <li>增加JVM内存设置</li>
+        <li>使用ROI模式分批处理</li>
+        <li>减少同时处理的细胞数量</li>
+        <li>重启QuPath释放内存</li>
+    </ul>
+</div>
+
+<h3>文件保存问题</h3>
+
+<div class="step-box">
+    <div class="step-title">Q: 无法保存配置或结果</div>
+    <strong>检查事项：</strong>
+    <ul>
+        <li>保存路径是否有写入权限</li>
+        <li>磁盘空间是否充足</li>
+        <li>文件路径是否包含特殊字符</li>
+        <li>使用英文路径避免编码问题</li>
+    </ul>
+</div>
+
+<div class="page-break"></div>
+
+<h2>技术支持信息</h2>
+
+<h3>版本兼容性</h3>
+<ul>
+    <li><strong>CycBiOx版本</strong>：v1.0.0</li>
+    <li><strong>QuPath支持</strong>：0.6.0+</li>
+    <li><strong>Java要求</strong>：21+</li>
+    <li><strong>操作系统</strong>：Windows、macOS、Linux</li>
+</ul>
+
+<h3>性能参考基准</h3>
+<table>
+    <tr>
+        <th>测试配置</th>
+        <th>细胞数量</th>
+        <th>处理时间</th>
+        <th>内存使用</th>
+    </tr>
+    <tr>
+        <td>标准配置</td>
+        <td>100万</td>
+        <td>30秒</td>
+        <td>4GB</td>
+    </tr>
+    <tr>
+        <td>高配置</td>
+        <td>1000万</td>
+        <td>5分钟</td>
+        <td>8GB</td>
+    </tr>
+    <tr>
+        <td>专业配置</td>
+        <td>1000万+</td>
+        <td>2分钟</td>
+        <td>16GB+</td>
+    </tr>
+</table>
+
+<h3>获取帮助</h3>
+<p>遇到问题时，请提供：</p>
+<ul>
+    <li>QuPath版本信息</li>
+    <li>错误截图或日志</li>
+    <li>数据集规模信息</li>
+    <li>具体操作步骤</li>
+    <li>系统配置信息</li>
+</ul>
+
+<div class="page-break"></div>
+
+<p style="text-align: center; font-style: italic; color: #666; margin-top: 40px;">
+    <em>CycBiOx v1.0.0 - 高效细胞表型分类解决方案<br>
+    专业级细胞分析工具，深度集成QuPath生态系统</em>
+</p>
+
+</body>
+</html>

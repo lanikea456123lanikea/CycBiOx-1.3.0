@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  qupath-plugin-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: qupath-cell-phenotype-plugin
+    volumes:
+      - .:/app
+      - gradle-cache:/root/.gradle
+    environment:
+      - JAVA_OPTS=-Xmx4g
+      - DISPLAY=${DISPLAY:-:0}
+    networks:
+      - qupath-network
+    stdin_open: true
+    tty: true
+    working_dir: /app
+    command: /bin/bash
+
+  # Optional: Add a QuPath service for testing
+  qupath:
+    image: "openjdk:21-jdk-slim"
+    container_name: qupath-runtime
+    volumes:
+      - .:/app/plugin
+      - qupath-data:/data
+    environment:
+      - JAVA_OPTS=-Xmx4g
+      - DISPLAY=${DISPLAY:-:0}
+    networks:
+      - qupath-network
+    depends_on:
+      - qupath-plugin-dev
+    stdin_open: true
+    tty: true
+
+volumes:
+  gradle-cache:
+    driver: local
+  qupath-data:
+    driver: local
+
+networks:
+  qupath-network:
+    driver: bridge

@@ -1,0 +1,10 @@
+Manifest-Version: 1.0
+Implementation-Title: CycBiOx - Advanced Immunofluorescence Cell Classif
+ ication and Phenotype Analysis for QuPath
+Implementation-Version: 1.0.0
+Implementation-Vendor: Cell Phenotype Manager Team
+Automatic-Module-Name: cycbiox.qupath.extension
+QuPath-Extension: true
+QuPath-Version: 0.6.0
+Java-Version: 21
+

@@ -384,80 +384,74 @@ public class CellPhenotypeManagerPane {
                 measurements.add("Nucleus: " + channelName + ": Max");
                 measurements.add("Nucleus: " + channelName + ": Min");
                 measurements.add("Nucleus: " + channelName + ": Std dev");
-                measurements.add("Nucleus: " + channelName + ": Sum");
+
+                measurements.add("Cell: " + channelName + ": Mean");
+                measurements.add("Cell: " + channelName + ": Median");
+                measurements.add("Cell: " + channelName + ": Max");
+                measurements.add("Cell: " + channelName + ": Min");
+                measurements.add("Cell: " + channelName + ": Std dev");
 
                 measurements.add("Cytoplasm: " + channelName + ": Mean");
                 measurements.add("Cytoplasm: " + channelName + ": Median");
                 measurements.add("Cytoplasm: " + channelName + ": Max");
                 measurements.add("Cytoplasm: " + channelName + ": Min");
                 measurements.add("Cytoplasm: " + channelName + ": Std dev");
-                measurements.add("Cytoplasm: " + channelName + ": Sum");
 
                 measurements.add("Membrane: " + channelName + ": Mean");
                 measurements.add("Membrane: " + channelName + ": Median");
                 measurements.add("Membrane: " + channelName + ": Max");
                 measurements.add("Membrane: " + channelName + ": Min");
                 measurements.add("Membrane: " + channelName + ": Std dev");
-                measurements.add("Membrane: " + channelName + ": Sum");
-
-                measurements.add("Cell: " + channelName + ": Mean");
-                measurements.add("Cell: " + channelName + ": Median");
                 break;
 
             case CELLPOSE:
-                // Cellpose: "CD68: Nucleus: Mean" 格式（通道名在前）
-                // 共20个：Channel:Nucleus(6) + Channel:Cytoplasm(6) + Channel:Cell(6) + Channel:Membrane(2)
-                measurements.add(channelName + ": Nucleus: Mean");
-                measurements.add(channelName + ": Nucleus: Median");
-                measurements.add(channelName + ": Nucleus: Max");
-                measurements.add(channelName + ": Nucleus: Min");
-                measurements.add(channelName + ": Nucleus: Std dev");
-                measurements.add(channelName + ": Nucleus: Sum");
+                // Cellpose
+                // 共15个：Channel:Nucleus(5) + Channel:Cytoplasm(5) + Channel:Cell(5) 
+                measurements.add("Nucleus: " + channelName + " mean");
+                measurements.add("Nucleus: " + channelName + " max");
+                measurements.add("Nucleus: " + channelName + " min");
+                measurements.add("Nucleus: " + channelName + " median");
+                measurements.add("Nucleus: " + channelName + " std dev");
 
-                measurements.add(channelName + ": Cytoplasm: Mean");
-                measurements.add(channelName + ": Cytoplasm: Median");
-                measurements.add(channelName + ": Cytoplasm: Max");
-                measurements.add(channelName + ": Cytoplasm: Min");
-                measurements.add(channelName + ": Cytoplasm: Std dev");
-                measurements.add(channelName + ": Cytoplasm: Sum");
+                measurements.add("Cytoplasm: " + channelName + " mean");
+                measurements.add("Cytoplasm: " + channelName + " max");
+                measurements.add("Cytoplasm: " + channelName + " min");
+                measurements.add("Cytoplasm: " + channelName + " median");
+                measurements.add("Cytoplasm: " + channelName + " std dev");
 
-                measurements.add(channelName + ": Cell: Mean");
-                measurements.add(channelName + ": Cell: Median");
-                measurements.add(channelName + ": Cell: Max");
-                measurements.add(channelName + ": Cell: Min");
-                measurements.add(channelName + ": Cell: Std dev");
-                measurements.add(channelName + ": Cell: Sum");
-
-                measurements.add(channelName + ": Membrane: Mean");
-                measurements.add(channelName + ": Membrane: Median");
+                measurements.add("Cell: " + channelName + " mean");
+                measurements.add("Cell: " + channelName + " max");
+                measurements.add("Cell: " + channelName + " min");
+                measurements.add("Cell: " + channelName + " median");
+                measurements.add("Cell: " + channelName + " std dev");
                 break;
 
             case INSTANSEG:
                 // InstanSeg: "Cell: CD68: Mean" 格式（Cell优先）
-                // 共20个：Cell(6) + Nucleus(6) + Cytoplasm(6) + Membrane(2)
+                // 共20个：Cell(5) + Nucleus(5) + Cytoplasm(5) + Membrane(5)
                 measurements.add("Cell: " + channelName + ": Mean");
                 measurements.add("Cell: " + channelName + ": Median");
                 measurements.add("Cell: " + channelName + ": Max");
                 measurements.add("Cell: " + channelName + ": Min");
                 measurements.add("Cell: " + channelName + ": Std dev");
-                measurements.add("Cell: " + channelName + ": Sum");
 
                 measurements.add("Nucleus: " + channelName + ": Mean");
                 measurements.add("Nucleus: " + channelName + ": Median");
                 measurements.add("Nucleus: " + channelName + ": Max");
                 measurements.add("Nucleus: " + channelName + ": Min");
                 measurements.add("Nucleus: " + channelName + ": Std dev");
-                measurements.add("Nucleus: " + channelName + ": Sum");
 
                 measurements.add("Cytoplasm: " + channelName + ": Mean");
                 measurements.add("Cytoplasm: " + channelName + ": Median");
                 measurements.add("Cytoplasm: " + channelName + ": Max");
                 measurements.add("Cytoplasm: " + channelName + ": Min");
                 measurements.add("Cytoplasm: " + channelName + ": Std dev");
-                measurements.add("Cytoplasm: " + channelName + ": Sum");
 
                 measurements.add("Membrane: " + channelName + ": Mean");
                 measurements.add("Membrane: " + channelName + ": Median");
+                measurements.add("Membrane: " + channelName + ": Max");
+                measurements.add("Membrane: " + channelName + ": Min");
+                measurements.add("Membrane: " + channelName + ": Std dev");
                 break;
 
             case QUPATH_DETECTION:
@@ -490,7 +484,7 @@ public class CellPhenotypeManagerPane {
      * v1.4.0: 根据分割模型过滤测量值
      * 每个模型有不同的格式：
      * - StarDist: "Nucleus: CD68: Mean"
-     * - Cellpose: "CD68: Nucleus: Mean"
+     * - Cellpose:  "Nucleus: CD68 mean"
      * - InstanSeg: "Cell: CD68: Mean"
      * - QuPath Detection: "Nucleus: CD68 mean"
      */
@@ -510,8 +504,8 @@ public class CellPhenotypeManagerPane {
                     break;
 
                 case CELLPOSE:
-                    // 格式: "CD68: Nucleus: Mean" (通道名在前)
-                    if (measurement.matches("^" + channelName + ":\\s*(Nucleus|Cell|Cytoplasm|Membrane):\\s*(Mean|Median|Max|Min|Std\\.Dev\\.)$")) {
+                    // 格式: "Nucleus: CD68 mean" (空格分隔，小写统计量，无Membrane)
+                    if (measurement.matches("^(Nucleus|Cell|Cytoplasm):\\s*" + channelName + "\\s+(mean|std dev|max|min)$")) {
                         matches = true;
                     }
                     break;
@@ -579,7 +573,7 @@ public class CellPhenotypeManagerPane {
                 "area", "perimeter", "circularity", "solidity", "max diameter",
                 "min diameter", "eccentricity", "compactness", "elongation",
                 "aspect ratio", "roundness", "convexity", "extent", "orientation",
-                "length", "width", "num spots", "num single positive"
+                "length", "width", "num spots", "num single positive", "sum"
             );
 
             // 获取通道的C-index（如果有映射）
@@ -6516,16 +6510,46 @@ public class CellPhenotypeManagerPane {
         // Enhanced ROI filtering with geometric intersection
         for (var cell : allCells) {
             if (!cell.hasROI()) continue;
-            
+
             var cellROI = cell.getROI();
             for (var roiObject : selectedROIs) {
                 var roi = roiObject.getROI();
                 if (roi != null && cellROI != null) {
-                    // Check if cell centroid is within ROI or if ROIs intersect
+                    // v1.4.0修复: 使用更准确的圆形ROI包含判断
+                    // 方法: 检查细胞ROI的中心点和边界框
                     double cellX = cellROI.getCentroidX();
                     double cellY = cellROI.getCentroidY();
-                    
-                    if (roi.contains(cellX, cellY)) {
+
+                    // 1. 首先检查中心点
+                    boolean centerInside = roi.contains(cellX, cellY);
+
+                    // 2. 如果中心点不在ROI内，检查细胞ROI的边界框是否与ROI相交
+                    boolean intersects = false;
+                    try {
+                        // 获取细胞的边界框
+                        double cellMinX = cellROI.getBoundsX();
+                        double cellMinY = cellROI.getBoundsY();
+                        double cellMaxX = cellMinX + cellROI.getBoundsWidth();
+                        double cellMaxY = cellMinY + cellROI.getBoundsHeight();
+
+                        // 获取ROI的边界框
+                        double roiMinX = roi.getBoundsX();
+                        double roiMinY = roi.getBoundsY();
+                        double roiMaxX = roiMinX + roi.getBoundsWidth();
+                        double roiMaxY = roiMinY + roi.getBoundsHeight();
+
+                        // AABB相交测试
+                        intersects = !(cellMaxX < roiMinX ||
+                                       cellMinX > roiMaxX ||
+                                       cellMaxY < roiMinY ||
+                                       cellMinY > roiMaxY);
+                    } catch (Exception e) {
+                        // 如果无法获取边界框，忽略相交检查
+                        intersects = false;
+                    }
+
+                    // 3. 如果中心点在ROI内或边界框相交，则认为细胞在ROI内
+                    if (centerInside || intersects) {
                         cellsInROI.add(cell);
                         break; // Cell is in at least one selected ROI
                     }
