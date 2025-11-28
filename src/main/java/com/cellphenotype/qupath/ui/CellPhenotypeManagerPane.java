@@ -6511,6 +6511,38 @@ public class CellPhenotypeManagerPane {
         logger.info("Selected objects count: {}", selectedObjects.size());
         logger.info("Selected ROIs count: {}", selectedROIs.size());
 
+        // v1.6.2: 添加更详细的ROI信息
+        logger.info("=== ROI DETAILS ===");
+        for (int i = 0; i < selectedROIs.size(); i++) {
+            var roiObj = selectedROIs.get(i);
+            var roi = roiObj.getROI();
+            if (roi != null) {
+                logger.info("ROI #{}: Class={}, Bounds=X{} Y{} W{} H{}, Centroid=({}, {})",
+                           i + 1,
+                           roiObj.getClass().getSimpleName(),
+                           roi.getBoundsX(), roi.getBoundsY(),
+                           roi.getBoundsWidth(), roi.getBoundsHeight(),
+                           roi.getCentroidX(), roi.getCentroidY());
+            }
+        }
+
+        // v1.6.2: 添加单元格样本信息
+        logger.info("=== CELL SAMPLE INFO ===");
+        int cellSampleCount = Math.min(5, allCells.size());
+        int sampleIndex = 0;
+        for (var cell : allCells) {
+            if (sampleIndex >= cellSampleCount) break;
+            if (cell.hasROI()) {
+                var cellROI = cell.getROI();
+                logger.info("Cell #{}: Centroid=({}, {}), Bounds=X{} Y{} W{} H{}",
+                           sampleIndex + 1,
+                           cellROI.getCentroidX(), cellROI.getCentroidY(),
+                           cellROI.getBoundsX(), cellROI.getBoundsY(),
+                           cellROI.getBoundsWidth(), cellROI.getBoundsHeight());
+                sampleIndex++;
+            }
+        }
+
         // v1.6.1: 记录第一个ROI的边界信息
         if (!selectedROIs.isEmpty()) {
             var firstROI = selectedROIs.get(0).getROI();
@@ -6523,7 +6555,7 @@ public class CellPhenotypeManagerPane {
 
         logger.info("Filtering {} cells using {} selected ROI(s)", allCells.size(), selectedROIs.size());
 
-        // v1.6.1: 彻底简化并添加调试日志，找出根本问题
+        // v1.6.2: 尝试不同的ROI检测方法，使用getContainsPoint()或类似方法
         int detectedCount = 0;
         for (var cell : allCells) {
             if (!cell.hasROI()) continue;
@@ -6532,25 +6564,52 @@ public class CellPhenotypeManagerPane {
             for (var roiObject : selectedROIs) {
                 var roi = roiObject.getROI();
                 if (roi != null && cellROI != null) {
-                    // v1.6.1: 只使用最简单的中心点检测（与QuPath原生一致）
+                    // v1.6.2: 尝试多种方法判断细胞是否在ROI内
                     boolean cellInROI = false;
 
                     try {
-                        // 获取细胞中心点
+                        // 方法1: 获取细胞中心点
                         double cellCenterX = cellROI.getCentroidX();
                         double cellCenterY = cellROI.getCentroidY();
 
-                        // 检查中心点是否在ROI内
+                        // 方法2: 检查中心点是否在ROI内（尝试不同的contains实现）
+                        // 如果ROI.contains(double, double)有问题，尝试其他方法
                         cellInROI = roi.contains(cellCenterX, cellCenterY);
 
-                        // v1.6.1: 添加调试日志
+                        // 如果方法1失败，尝试方法2：使用Cell ROI的边界框
+                        if (!cellInROI) {
+                            // 获取细胞ROI的边界框
+                            double cellMinX = cellROI.getBoundsX();
+                            double cellMinY = cellROI.getBoundsY();
+                            double cellMaxX = cellMinX + cellROI.getBoundsWidth();
+                            double cellMaxY = cellMinY + cellROI.getBoundsHeight();
+
+                            // 检查细胞ROI的四个角点是否有任何一个在ROI内
+                            if (roi.contains(cellMinX, cellMinY) ||
+                                roi.contains(cellMaxX, cellMinY) ||
+                                roi.contains(cellMaxX, cellMaxY) ||
+                                roi.contains(cellMinX, cellMaxY) ||
+                                roi.contains(cellCenterX, cellCenterY)) {
+                                cellInROI = true;
+                            }
+                        }
+
+                        // v1.6.2: 添加调试日志
                         if (cellInROI) {
                             detectedCount++;
-                            logger.debug("Cell #{} at ({}, {}) is INSIDE ROI (center point check)",
+                            logger.debug("Cell #{} at ({}, {}) is INSIDE ROI (comprehensive check)",
                                        detectedCount, cellCenterX, cellCenterY);
                         }
                     } catch (Exception e) {
                         logger.warn("ROI检测异常: {}", e.getMessage(), e);
+                        // 尝试简单的中心点检测作为备选
+                        try {
+                            double cellCenterX = cellROI.getCentroidX();
+                            double cellCenterY = cellROI.getCentroidY();
+                            cellInROI = roi.contains(cellCenterX, cellCenterY);
+                        } catch (Exception ex) {
+                            logger.error("所有ROI检测方法都失败", ex);
+                        }
                     }
 
                     if (cellInROI) {
