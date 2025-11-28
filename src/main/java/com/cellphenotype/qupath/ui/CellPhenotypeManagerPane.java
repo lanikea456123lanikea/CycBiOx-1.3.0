@@ -6515,75 +6515,70 @@ public class CellPhenotypeManagerPane {
             for (var roiObject : selectedROIs) {
                 var roi = roiObject.getROI();
                 if (roi != null && cellROI != null) {
-                    // v1.4.1修复: 使用精确的圆形ROI包含判断
+                    // v1.4.3修复: 使用边界+中心综合检测
+                    // QuPath可能使用：边界点检测 + 中心点检测的组合
+
+                    // 1. 中心点检测（QuPath主要方法）
                     double cellX = cellROI.getCentroidX();
                     double cellY = cellROI.getCentroidY();
-
-                    // 1. 检查细胞中心点是否在ROI内
                     boolean centerInside = roi.contains(cellX, cellY);
 
-                    // 2. 如果中心点不在ROI内，进行更精确的几何判断
-                    if (!centerInside) {
-                        try {
-                            // 获取细胞的边界框
-                            double cellMinX = cellROI.getBoundsX();
-                            double cellMinY = cellROI.getBoundsY();
-                            double cellMaxX = cellMinX + cellROI.getBoundsWidth();
-                            double cellMaxY = cellMinY + cellROI.getBoundsHeight();
+                    // 2. 获取细胞边界框
+                    double cellMinX = cellROI.getBoundsX();
+                    double cellMinY = cellROI.getBoundsY();
+                    double cellMaxX = cellMinX + cellROI.getBoundsWidth();
+                    double cellMaxY = cellMinY + cellROI.getBoundsHeight();
 
-                            // 获取ROI的边界框
-                            double roiMinX = roi.getBoundsX();
-                            double roiMinY = roi.getBoundsY();
-                            double roiMaxX = roiMinX + roi.getBoundsWidth();
-                            double roiMaxY = roiMinY + roi.getBoundsHeight();
+                    // 3. AABB快速排除测试
+                    double roiMinX = roi.getBoundsX();
+                    double roiMinY = roi.getBoundsY();
+                    double roiMaxX = roiMinX + roi.getBoundsWidth();
+                    double roiMaxY = roiMinY + roi.getBoundsHeight();
 
-                            // AABB快速排除测试：如果边界框完全不相交，则跳过
-                            boolean aabbNoOverlap = (cellMaxX < roiMinX ||
-                                                     cellMinX > roiMaxX ||
-                                                     cellMaxY < roiMinY ||
-                                                     cellMinY > roiMaxY);
-                            if (aabbNoOverlap) {
-                                continue; // 边界框都不相交，直接跳过
-                            }
+                    boolean aabbNoOverlap = (cellMaxX < roiMinX ||
+                                             cellMinX > roiMaxX ||
+                                             cellMaxY < roiMinY ||
+                                             cellMinY > roiMaxY);
+                    if (aabbNoOverlap) {
+                        continue; // 边界框完全不相交
+                    }
 
-                            // 对于圆形ROI，计算细胞边界框的四个角点
-                            double[] cellCornersX = {cellMinX, cellMaxX, cellMinX, cellMaxX};
-                            double[] cellCornersY = {cellMinY, cellMinY, cellMaxY, cellMaxY};
+                    // 4. 边界点检测（QuPath可能使用）
+                    // 检查细胞边界框的8个点：4个角点 + 4个边的中点
+                    double[] boundaryPointsX = {
+                        cellMinX,                // 左中点
+                        cellMaxX,                // 右中点
+                        (cellMinX + cellMaxX) / 2, // 上中点
+                        (cellMinX + cellMaxX) / 2, // 下中点
+                        cellMinX,                // 左上角
+                        cellMaxX,                // 右上角
+                        cellMinX,                // 左下角
+                        cellMaxX                 // 右下角
+                    };
+                    double[] boundaryPointsY = {
+                        (cellMinY + cellMaxY) / 2, // 左中点
+                        (cellMinY + cellMaxY) / 2, // 右中点
+                        cellMinY,                // 上中点
+                        cellMaxY,                // 下中点
+                        cellMinY,                // 左上角
+                        cellMinY,                // 右上角
+                        cellMaxY,                // 左下角
+                        cellMaxY                 // 右下角
+                    };
 
-                            // 获取圆形ROI的中心和半径
-                            double roiCenterX = roi.getCentroidX();
-                            double roiCenterY = roi.getCentroidY();
-                            double roiRadius = roi.getBoundsWidth() / 2.0; // 假设是圆形ROI
-
-                            // 检查细胞边界框的四个角点是否在圆形内
-                            boolean anyCornerInside = false;
-                            for (int i = 0; i < 4; i++) {
-                                double cornerX = cellCornersX[i];
-                                double cornerY = cellCornersY[i];
-                                double distToCenter = Math.sqrt(
-                                    Math.pow(cornerX - roiCenterX, 2) +
-                                    Math.pow(cornerY - roiCenterY, 2)
-                                );
-                                if (distToCenter <= roiRadius) {
-                                    anyCornerInside = true;
-                                    break;
-                                }
-                            }
-
-                            // 如果任意角点在圆形内，认为细胞在ROI内
-                            if (anyCornerInside) {
-                                cellsInROI.add(cell);
-                                break;
-                            }
-                        } catch (Exception e) {
-                            // 如果出现异常，使用旧的简单方法
-                            if (centerInside) {
-                                cellsInROI.add(cell);
-                                break;
-                            }
+                    // 5. 边界点检测（QuPath可能使用）
+                    boolean anyBoundaryPointInside = false;
+                    for (int i = 0; i < 8; i++) {
+                        double pointX = boundaryPointsX[i];
+                        double pointY = boundaryPointsY[i];
+                        if (roi.contains(pointX, pointY)) {
+                            anyBoundaryPointInside = true;
+                            break;
                         }
-                    } else {
-                        // 中心点在ROI内，直接添加
+                    }
+
+                    // 6. 综合判断：中心点OR边界点
+                    if (centerInside || anyBoundaryPointInside) {
                         cellsInROI.add(cell);
                         break;
                     }
@@ -6591,8 +6586,22 @@ public class CellPhenotypeManagerPane {
             }
         }
         
-        logger.info("ROI filtering: {} cells found within {} selected ROI(s) out of {} total cells", 
+        logger.info("ROI filtering: {} cells found within {} selected ROI(s) out of {} total cells",
                    cellsInROI.size(), selectedROIs.size(), allCells.size());
+
+        // v1.4.3调试: 添加详细统计信息
+        logger.info("=== ROI检测调试信息 ===");
+        logger.info("总细胞数: {}", allCells.size());
+        logger.info("ROI内细胞数: {}", cellsInROI.size());
+        logger.info("选中ROI数: {}", selectedROIs.size());
+        if (selectedROIs.size() > 0) {
+            var roi = selectedROIs.get(0).getROI();
+            logger.info("ROI中心: ({}, {})", roi.getCentroidX(), roi.getCentroidY());
+            logger.info("ROI范围: x=[{}, {}], y=[{}, {}]",
+                       roi.getBoundsX(), roi.getBoundsX() + roi.getBoundsWidth(),
+                       roi.getBoundsY(), roi.getBoundsY() + roi.getBoundsHeight());
+        }
+        logger.info("=== 调试信息结束 ===");
         
         return cellsInROI;
     }
