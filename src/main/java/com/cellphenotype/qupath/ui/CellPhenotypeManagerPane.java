@@ -6504,10 +6504,27 @@ public class CellPhenotypeManagerPane {
         // Get all cells
         Collection<qupath.lib.objects.PathObject> allCells = hierarchy.getDetectionObjects();
         List<qupath.lib.objects.PathObject> cellsInROI = new ArrayList<>();
-        
+
+        // v1.6.1: 添加调试日志
+        logger.info("=== DEBUG INFO ===");
+        logger.info("Total cells in hierarchy: {}", allCells.size());
+        logger.info("Selected objects count: {}", selectedObjects.size());
+        logger.info("Selected ROIs count: {}", selectedROIs.size());
+
+        // v1.6.1: 记录第一个ROI的边界信息
+        if (!selectedROIs.isEmpty()) {
+            var firstROI = selectedROIs.get(0).getROI();
+            if (firstROI != null) {
+                logger.info("First ROI bounds: X={}, Y={}, W={}, H={}",
+                           firstROI.getBoundsX(), firstROI.getBoundsY(),
+                           firstROI.getBoundsWidth(), firstROI.getBoundsHeight());
+            }
+        }
+
         logger.info("Filtering {} cells using {} selected ROI(s)", allCells.size(), selectedROIs.size());
-        
-        // Enhanced ROI filtering with geometric intersection
+
+        // v1.6.1: 彻底简化并添加调试日志，找出根本问题
+        int detectedCount = 0;
         for (var cell : allCells) {
             if (!cell.hasROI()) continue;
 
@@ -6515,66 +6532,38 @@ public class CellPhenotypeManagerPane {
             for (var roiObject : selectedROIs) {
                 var roi = roiObject.getROI();
                 if (roi != null && cellROI != null) {
-                    // v1.4.0修复: 使用更准确的圆形ROI包含判断
-                    // 方法: 检查细胞ROI的中心点和边界框
-                    double cellX = cellROI.getCentroidX();
-                    double cellY = cellROI.getCentroidY();
-
-                    // 1. 首先检查中心点
-                    boolean centerInside = roi.contains(cellX, cellY);
-
-                    // 2. 如果中心点不在ROI内，检查细胞ROI的边界框是否与ROI相交
-                    boolean intersects = false;
-                    try {
-                        // 获取细胞的边界框
-                        double cellMinX = cellROI.getBoundsX();
-                        double cellMinY = cellROI.getBoundsY();
-                        double cellMaxX = cellMinX + cellROI.getBoundsWidth();
-                        double cellMaxY = cellMinY + cellROI.getBoundsHeight();
-
-                        // 获取ROI的边界框
-                        double roiMinX = roi.getBoundsX();
-                        double roiMinY = roi.getBoundsY();
-                        double roiMaxX = roiMinX + roi.getBoundsWidth();
-                        double roiMaxY = roiMinY + roi.getBoundsHeight();
-
-                        // AABB相交测试
-                        intersects = !(cellMaxX < roiMinX ||
-                                       cellMinX > roiMaxX ||
-                                       cellMaxY < roiMinY ||
-                                       cellMinY > roiMaxY);
-                    } catch (Exception e) {
-                        // 如果无法获取边界框，忽略相交检查
-                        intersects = false;
-                    }
-
-                    // v1.6.0: 使用最简单的中心点检测（与QuPath原生一致）
-                    // 基于用户反馈：QuPath的Num Detections就是基于中心点，中心点在边缘也包含
+                    // v1.6.1: 只使用最简单的中心点检测（与QuPath原生一致）
                     boolean cellInROI = false;
 
                     try {
-                        // 只检查细胞ROI的中心点（与QuPath原生逻辑一致）
+                        // 获取细胞中心点
                         double cellCenterX = cellROI.getCentroidX();
                         double cellCenterY = cellROI.getCentroidY();
 
-                        // 使用QuPath ROI.contains方法，检查中心点是否在ROI内（包含边界）
-                        if (roi.contains(cellCenterX, cellCenterY)) {
-                            cellInROI = true;
+                        // 检查中心点是否在ROI内
+                        cellInROI = roi.contains(cellCenterX, cellCenterY);
+
+                        // v1.6.1: 添加调试日志
+                        if (cellInROI) {
+                            detectedCount++;
+                            logger.debug("Cell #{} at ({}, {}) is INSIDE ROI (center point check)",
+                                       detectedCount, cellCenterX, cellCenterY);
                         }
                     } catch (Exception e) {
-                        // 异常处理：回退到中心点检测
-                        logger.warn("ROI检测异常，回退到中心点检测: {}", e.getMessage());
-                        cellInROI = centerInside;
+                        logger.warn("ROI检测异常: {}", e.getMessage(), e);
                     }
 
                     if (cellInROI) {
                         cellsInROI.add(cell);
                         break; // Cell is in at least one selected ROI
                     }
-
                 }
             }
         }
+
+        logger.info("=== FINAL RESULT ===");
+        logger.info("Cells found in ROI: {}", cellsInROI.size());
+        logger.info("Detected count: {}", detectedCount);
         
         logger.info("ROI filtering: {} cells found within {} selected ROI(s) out of {} total cells", 
                    cellsInROI.size(), selectedROIs.size(), allCells.size());
