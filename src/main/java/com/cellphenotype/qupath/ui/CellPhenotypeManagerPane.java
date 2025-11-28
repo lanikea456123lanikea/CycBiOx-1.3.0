@@ -6548,10 +6548,82 @@ public class CellPhenotypeManagerPane {
                         intersects = false;
                     }
 
-                    // 3. 如果中心点在ROI内或边界框相交，则认为细胞在ROI内
-                    if (centerInside || intersects) {
-                        cellsInROI.add(cell);
-                        break; // Cell is in at least one selected ROI
+                    // 3. 如果中心点在ROI内，进行更精确的检测
+                    if (centerInside) {
+                        // v1.4.4: 密集网格采样方法 - 使用5x5网格（25个点）进行最精确的ROI检测
+                        // 适用于圆形ROI等复杂形状，避免边缘细胞误判
+                        boolean anyPointInside = false;
+                        int gridSize = 5; // 5x5网格，25个采样点
+                        try {
+                            // 获取细胞的边界框
+                            double cellMinX = cellROI.getBoundsX();
+                            double cellMinY = cellROI.getBoundsY();
+                            double cellMaxX = cellMinX + cellROI.getBoundsWidth();
+                            double cellMaxY = cellMinY + cellROI.getBoundsHeight();
+
+                            // 在边界框内进行5x5网格采样
+                            for (int i = 0; i < gridSize; i++) {
+                                for (int j = 0; j < gridSize; j++) {
+                                    // 计算采样点坐标（均匀分布）
+                                    double pointX = cellMinX + (cellMaxX - cellMinX) * i / (gridSize - 1);
+                                    double pointY = cellMinY + (cellMaxY - cellMinY) * j / (gridSize - 1);
+
+                                    // 检查采样点是否在ROI内
+                                    if (roi.contains(pointX, pointY)) {
+                                        anyPointInside = true;
+                                        break;
+                                    }
+                                }
+                                if (anyPointInside) {
+                                    break;
+                                }
+                            }
+                        } catch (Exception e) {
+                            // 如果网格采样失败，回退到中心点检测
+                            anyPointInside = true;
+                        }
+
+                        if (anyPointInside) {
+                            cellsInROI.add(cell);
+                            break; // Cell is in at least one selected ROI
+                        }
+                    } else if (intersects) {
+                        // v1.4.4: 边界框相交的情况也需要密集网格采样确认
+                        boolean anyPointInside = false;
+                        int gridSize = 5; // 5x5网格，25个采样点
+                        try {
+                            // 获取细胞的边界框
+                            double cellMinX = cellROI.getBoundsX();
+                            double cellMinY = cellROI.getBoundsY();
+                            double cellMaxX = cellMinX + cellROI.getBoundsWidth();
+                            double cellMaxY = cellMinY + cellROI.getBoundsHeight();
+
+                            // 在边界框内进行5x5网格采样
+                            for (int i = 0; i < gridSize; i++) {
+                                for (int j = 0; j < gridSize; j++) {
+                                    // 计算采样点坐标（均匀分布）
+                                    double pointX = cellMinX + (cellMaxX - cellMinX) * i / (gridSize - 1);
+                                    double pointY = cellMinY + (cellMaxY - cellMinY) * j / (gridSize - 1);
+
+                                    // 检查采样点是否在ROI内
+                                    if (roi.contains(pointX, pointY)) {
+                                        anyPointInside = true;
+                                        break;
+                                    }
+                                }
+                                if (anyPointInside) {
+                                    break;
+                                }
+                            }
+                        } catch (Exception e) {
+                            // 如果无法进行网格采样，使用简单的相交判断
+                            anyPointInside = intersects;
+                        }
+
+                        if (anyPointInside) {
+                            cellsInROI.add(cell);
+                            break; // Cell is in at least one selected ROI
+                        }
                     }
                 }
             }
