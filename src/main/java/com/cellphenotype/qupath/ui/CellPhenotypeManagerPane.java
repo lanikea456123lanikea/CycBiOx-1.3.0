@@ -6480,6 +6480,10 @@ public class CellPhenotypeManagerPane {
     /**
      * Get cells within currently selected ROI(s)
      */
+    /**
+     * Get cells within currently selected ROI(s)
+     * v1.7.3: 直接使用QuPath原生的选择功能
+     */
     private List<qupath.lib.objects.PathObject> getCellsInSelectedROI(ImageData<?> imageData) {
         // Check if ROI mode is enabled via the cell analysis combo box
         boolean isRoiMode = cellAnalysisComboBox != null && "当前选中细胞".equals(cellAnalysisComboBox.getValue());
@@ -6489,147 +6493,96 @@ public class CellPhenotypeManagerPane {
         }
 
         var hierarchy = imageData.getHierarchy();
+
+        // v1.7.3: 首先尝试直接使用QuPath原生的选择功能
+        // 当用户选择ROI时，QuPath会自动选中ROI内的所有细胞
         var selectedObjects = hierarchy.getSelectionModel().getSelectedObjects();
 
-        // Get selected ROI objects (non-detection objects with ROI)
-        List<qupath.lib.objects.PathObject> selectedROIs = selectedObjects.stream()
-            .filter(obj -> obj.hasROI() && !obj.isDetection())
+        logger.info("=== v1.7.3 Using QuPath Native Selection ===");
+        logger.info("Total selected objects: {}", selectedObjects.size());
+
+        // 获取所有选中的对象���，是细胞（detection）的那些
+        List<qupath.lib.objects.PathObject> selectedCells = selectedObjects.stream()
+            .filter(obj -> obj.hasROI() && obj.isDetection())
             .collect(Collectors.toList());
 
-        if (selectedROIs.isEmpty()) {
-            logger.warn("ROI mode enabled but no ROI objects selected. Processing all cells.");
-            return new ArrayList<>(hierarchy.getDetectionObjects());
+        logger.info("Selected cells in ROI: {}", selectedCells.size());
+
+        // 记录前5个细胞作为样本
+        for (int i = 0; i < Math.min(5, selectedCells.size()); i++) {
+            var cell = selectedCells.get(i);
+            var cellROI = cell.getROI();
+            if (cellROI != null) {
+                logger.info("  Cell #{}: center=({}, {}) - Selected by QuPath",
+                           i + 1, cellROI.getCentroidX(), cellROI.getCentroidY());
+            }
         }
 
-        // v1.7.2: 修复关键问题 - 自己实现精确的ROI检测，不依赖roi.contains()
-        // 问题：roi.contains()对圆形/椭圆形ROI有精度问题，特别是边界点
-        // 解决：自己实现精确的几何检测
-        Collection<qupath.lib.objects.PathObject> allCells = hierarchy.getDetectionObjects();
-        List<qupath.lib.objects.PathObject> cellsInROI = new ArrayList<>();
+        // v1.7.3: 如果QuPath没有自动选中细胞（比如只选了ROI对象），
+        // 则需要让QuPath手动筛选一下
+        if (selectedCells.isEmpty()) {
+            logger.info("No cells auto-selected by QuPath, falling back to manual detection");
+            
+            // 获取选中的ROI对象
+            List<qupath.lib.objects.PathObject> selectedROIs = selectedObjects.stream()
+                .filter(obj -> obj.hasROI() && !obj.isDetection())
+                .collect(Collectors.toList());
 
-        // v1.7.2: 简化调试日志
-        logger.info("=== v1.7.2 Precision ROI Detection ===");
-        logger.info("Total cells in hierarchy: {}", allCells.size());
-        logger.info("Selected ROIs count: {}", selectedROIs.size());
+            if (!selectedROIs.isEmpty()) {
+                logger.info("Number of selected ROIs: {}", selectedROIs.size());
 
-        // v1.7.0: 逐个ROI处理
-        for (int roiIndex = 0; roiIndex < selectedROIs.size(); roiIndex++) {
-            var roiObject = selectedROIs.get(roiIndex);
-            var roi = roiObject.getROI();
+                // 回退到手动检测逻辑（简化版）
+                List<qupath.lib.objects.PathObject> allCells = new ArrayList<>(hierarchy.getDetectionObjects());
+                List<qupath.lib.objects.PathObject> cellsInROI = new ArrayList<>();
 
-            if (roi == null) {
-                logger.warn("ROI #{} has null ROI object", roiIndex + 1);
-                continue;
-            }
+                for (var roiObject : selectedROIs) {
+                    var roi = roiObject.getROI();
+                    if (roi == null) continue;
 
-            // v1.7.0: 记录ROI信息
-            double roiX = roi.getBoundsX();
-            double roiY = roi.getBoundsY();
-            double roiW = roi.getBoundsWidth();
-            double roiH = roi.getBoundsHeight();
+                    double roiX = roi.getBoundsX();
+                    double roiY = roi.getBoundsY();
+                    double roiW = roi.getBoundsWidth();
+                    double roiH = roi.getBoundsHeight();
 
-            logger.info("ROI #{}: X={}, Y={}, W={}, H={}",
-                       roiIndex + 1, roiX, roiY, roiW, roiH);
+                    logger.info("ROI: X={}, Y={}, W={}, H={}", roiX, roiY, roiW, roiH);
 
-            // v1.7.2: 修复关键问题 - 自己实现精确的ROI检测，不依赖roi.contains()
-            // 问题：roi.contains()对圆形/椭圆形ROI有精度问题，特别是边界点
-            // 解决：自己实现精确的几何检测
-            int cellsInThisROI = 0;
-            for (var cell : allCells) {
-                if (!cell.hasROI()) continue;
+                    int cellsInThisROI = 0;
+                    for (var cell : allCells) {
+                        if (!cell.hasROI()) continue;
 
-                var cellROI = cell.getROI();
-                if (cellROI == null) continue;
+                        var cellROI = cell.getROI();
+                        if (cellROI == null) continue;
 
-                try {
-                    // 获取细胞中心点
-                    double cellCX = cellROI.getCentroidX();
-                    double cellCY = cellROI.getCentroidY();
+                        // v1.7.3: 使���简化的中心点检测
+                        double cellCX = cellROI.getCentroidX();
+                        double cellCY = cellROI.getCentroidY();
 
-                    // v1.7.2: 简化的精确检测 - 只对边界情况进行二次检测
-                    boolean isInsideROI = false;
+                        // 首先尝试常规检测
+                        if (roi.contains(cellCX, cellCY)) {
+                            cellsInROI.add(cell);
+                            cellsInThisROI++;
 
-                    // 首先尝试常规检测
-                    if (roi.contains(cellCX, cellCY)) {
-                        isInsideROI = true;
-                    } else {
-                        // v1.7.2: 如果常规检测失败，检查是否是浮点精度问题
-                        // 对于圆形/椭圆形ROI，边界点可能有精度问题
-                        // 使用非常小的容差进行二次检测
-                        double epsilon = 1e-10;
-
-                        // 获取ROI边界
-                        double roiMinX = roi.getBoundsX();
-                        double roiMinY = roi.getBoundsY();
-                        double roiMaxX = roiMinX + roi.getBoundsWidth();
-                        double roiMaxY = roiMinY + roi.getBoundsHeight();
-                        double roiCenterX = (roiMinX + roiMaxX) / 2.0;
-                        double roiCenterY = (roiMinY + roiMaxY) / 2.0;
-
-                        // 检查点是否在边界框内（包含边界，容差）
-                        if (cellCX >= roiMinX - epsilon && cellCX <= roiMaxX + epsilon &&
-                            cellCY >= roiMinY - epsilon && cellCY <= roiMaxY + epsilon) {
-
-                            // 对于近似圆形的ROI，使用距离检测
-                            double roiWidth = roi.getBoundsWidth();
-                            double roiHeight = roi.getBoundsHeight();
-                            double aspectRatio = roiWidth / roiHeight;
-
-                            if (Math.abs(aspectRatio - 1.0) < 0.5) {
-                                // 近似圆形/椭圆形
-                                double radiusX = roiWidth / 2.0;
-                                double radiusY = roiHeight / 2.0;
-
-                                double dx = (cellCX - roiCenterX) / radiusX;
-                                double dy = (cellCY - roiCenterY) / radiusY;
-                                double distance = Math.sqrt(dx * dx + dy * dy);
-
-                                // 允许很小的容差
-                                if (distance <= 1.0 + epsilon * 100) {
-                                    isInsideROI = true;
-                                }
-                            } else {
-                                // 其他形状：如果点在边界框内且接近中心，认为在ROI内
-                                double centerDistance = Math.sqrt(
-                                    Math.pow(cellCX - roiCenterX, 2) + Math.pow(cellCY - roiCenterY, 2)
-                                );
-                                double maxDistance = Math.sqrt(roiWidth * roiWidth + roiHeight * roiHeight) / 2.0;
-
-                                if (centerDistance <= maxDistance + epsilon) {
-                                    isInsideROI = true;
-                                }
+                            if (cellsInThisROI <= 5) {
+                                logger.info("  Cell #{}: center=({}, {}) - IN ROI",
+                                           cellsInThisROI, cellCX, cellCY);
                             }
                         }
                     }
 
-                    if (isInsideROI) {
-                        cellsInROI.add(cell);
-                        cellsInThisROI++;
-
-                        // v1.7.2: 记录前5个细胞作为样本
-                        if (cellsInThisROI <= 5) {
-                            logger.debug("  Cell #{}: center=({}, {}) - IN ROI (precision check)",
-                                       cellsInThisROI, cellCX, cellCY);
-                        }
-                    }
-                } catch (Exception e) {
-                    logger.warn("Error checking cell: {}", e.getMessage());
+                    logger.info("ROI contains {} cells", cellsInThisROI);
                 }
-            }
 
-            logger.info("ROI #{} contains {} cells (precision detection)", roiIndex + 1, cellsInThisROI);
+                logger.info("=== v1.7.3 Fallback Result ===");
+                logger.info("Total cells found in ROI(s): {}", cellsInROI.size());
 
-            // v1.7.0: 如果是单ROI模式，只处理第一个ROI
-            if (selectedROIs.size() == 1) {
-                break;
+                return cellsInROI;
             }
         }
 
-        // v1.7.2: 最终结果
-        logger.info("=== v1.7.2 Precision Detection Result ===");
-        logger.info("Total cells found in ROI(s): {}", cellsInROI.size());
+        logger.info("=== v1.7.3 Result ===");
+        logger.info("Total cells found in ROI(s): {}", selectedCells.size());
 
-        return cellsInROI;
+        return selectedCells;
     }
 
 
