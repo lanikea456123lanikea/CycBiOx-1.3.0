@@ -6477,12 +6477,13 @@ public class CellPhenotypeManagerPane {
         }
     }
 
+
     /**
      * Get cells within currently selected ROI(s)
-     * v1.7.4: 直接使用中心点检测（与QuPath Num Detections一致）
+     * v1.7.6: 简化版本，使用最可靠的方法
      */
     private List<qupath.lib.objects.PathObject> getCellsInSelectedROI(ImageData<?> imageData) {
-        // Check if ROI mode is enabled via the cell analysis combo box
+        // Check if ROI mode is enabled
         boolean isRoiMode = cellAnalysisComboBox != null && "当前选中细胞".equals(cellAnalysisComboBox.getValue());
 
         if (!isRoiMode || imageData == null) {
@@ -6491,26 +6492,26 @@ public class CellPhenotypeManagerPane {
 
         var hierarchy = imageData.getHierarchy();
 
-        // 获取用户当前选中的ROI对象
+        // Get selected ROI objects
         var selectedObjects = hierarchy.getSelectionModel().getSelectedObjects();
         List<qupath.lib.objects.PathObject> selectedROIs = selectedObjects.stream()
             .filter(obj -> obj.hasROI() && !obj.isDetection())
             .collect(Collectors.toList());
 
         if (selectedROIs.isEmpty()) {
-            logger.warn("ROI mode enabled but no ROI selected. Processing all cells.");
+            logger.warn("No ROI selected, processing all cells");
             return new ArrayList<>(hierarchy.getDetectionObjects());
         }
 
-        // 获取所有细胞
+        // Get all cells
         List<qupath.lib.objects.PathObject> allCells = new ArrayList<>(hierarchy.getDetectionObjects());
         List<qupath.lib.objects.PathObject> cellsInROI = new ArrayList<>();
 
-        logger.info("=== v1.7.4 Direct Center-Point Detection ===");
-        logger.info("Total cells in hierarchy: {}", allCells.size());
-        logger.info("Number of selected ROIs: {}", selectedROIs.size());
+        logger.info("=== v1.7.6 Simple Detection ===");
+        logger.info("Total cells: {}", allCells.size());
+        logger.info("Selected ROIs: {}", selectedROIs.size());
 
-        // 对每个ROI，逐个检查所有细胞
+        // For each ROI, collect cells
         for (var roiObject : selectedROIs) {
             var roi = roiObject.getROI();
             if (roi == null) continue;
@@ -6520,44 +6521,71 @@ public class CellPhenotypeManagerPane {
             double roiW = roi.getBoundsWidth();
             double roiH = roi.getBoundsHeight();
 
-            logger.info("ROI: X={}, Y={}, W={}, H={}", roiX, roiY, roiW, roiH);
+            logger.info("ROI bounds: X={}, Y={}, W={}, H={}", roiX, roiY, roiW, roiH);
 
             int cellsInThisROI = 0;
-            // 遍历所有细胞，检查中心点是否在ROI内
+            
+            // Check each cell
             for (var cell : allCells) {
                 if (!cell.hasROI()) continue;
-
+                
                 var cellROI = cell.getROI();
                 if (cellROI == null) continue;
 
-                // 获取细胞中心点
                 double cellCX = cellROI.getCentroidX();
                 double cellCY = cellROI.getCentroidY();
 
-                // 使用roi.contains()检查中心点（与QuPath Num Detections一致）
-                if (roi.contains(cellCX, cellCY)) {
-                    cellsInROI.add(cell);
-                    cellsInThisROI++;
-
-                    // 记录前5个细胞作为样本
-                    if (cellsInThisROI <= 5) {
-                        logger.info("  Cell #{}: center=({}, {}) - IN ROI",
-                                   cellsInThisROI, cellCX, cellCY);
+                // Check if cell center is inside ROI
+                try {
+                    // First try the contains method
+                    boolean inside = roi.contains(cellCX, cellCY);
+                    
+                    // If contains returns false, check if it's very close to the boundary
+                    if (!inside) {
+                        // For circular/elliptical ROIs, do an additional check with small tolerance
+                        double tolerance = 0.5; // 0.5 pixel tolerance
+                        
+                        // Check if cell center is within ROI bounds with tolerance
+                        boolean withinBounds = 
+                            cellCX >= (roiX - tolerance) && 
+                            cellCX <= (roiX + roiW + tolerance) &&
+                            cellCY >= (roiY - tolerance) && 
+                            cellCY <= (roiY + roiH + tolerance);
+                        
+                        if (withinBounds) {
+                            // Additional check for circular/elliptical ROIs
+                            double roiCenterX = roiX + roiW / 2.0;
+                            double roiCenterY = roiY + roiH / 2.0;
+                            double distance = Math.sqrt(
+                                Math.pow(cellCX - roiCenterX, 2) + 
+                                Math.pow(cellCY - roiCenterY, 2)
+                            );
+                            double maxDistance = Math.sqrt(roiW * roiW + roiH * roiH) / 2.0;
+                            
+                            if (distance <= maxDistance + tolerance) {
+                                inside = true;
+                            }
+                        }
                     }
+                    
+                    if (inside) {
+                        cellsInROI.add(cell);
+                        cellsInThisROI++;
+                        
+                        if (cellsInThisROI <= 3) {
+                            logger.info("  Cell[{}]: center=({:.2f},{:.2f})", 
+                                       cellsInThisROI, cellCX, cellCY);
+                        }
+                    }
+                } catch (Exception e) {
+                    logger.error("Error checking cell: {}", e.getMessage());
                 }
             }
-
-            logger.info("ROI contains {} cells", cellsInThisROI);
             
-            // 如果只有一个ROI，提前结束（避免重复计算）
-            if (selectedROIs.size() == 1) {
-                break;
-            }
+            logger.info("ROI contains {} cells", cellsInThisROI);
         }
 
-        logger.info("=== v1.7.4 Result ===");
-        logger.info("Total cells found in ROI(s): {}", cellsInROI.size());
-
+        logger.info("=== v1.7.6 Result: {} cells ===", cellsInROI.size());
         return cellsInROI;
     }
 
@@ -6577,36 +6605,8 @@ public class CellPhenotypeManagerPane {
 
     private void updateButtonStates() {
         if (executeButton != null) {
-            // Create模式下，执行策略不可点击
             executeButton.setDisable(currentMode == OperationMode.CREATE_CLASSIFIER);
-
-            if (currentMode == OperationMode.CREATE_CLASSIFIER) {
-                executeButton.setStyle("-fx-background-color: #6c757d; -fx-text-fill: white; -fx-font-size: 13px;");
-                executeButton.setText("运行");
-            } else {
-                executeButton.setStyle("-fx-background-color: #28a745; -fx-text-fill: white; -fx-font-size: 13px; -fx-font-weight: bold;");
-                executeButton.setText("运行");
-            }
         }
-    }
-
-    /**
-     * 更新通道控件为Auto模式
-     */
-
-    /**
-     * Calculate Otsu threshold for automatic threshold detection
-     */
-    /**
-     * Triangle算法计算阈值
-     */
-    private double calculateTriangleThreshold(List<Double> values) {
-        if (values.isEmpty()) {
-            return 100.0;
-        }
-
-        // 性能优化：使用快速选择找分位数，避免完整排序 O(N) vs O(N log N)
-        return quickSelect(new ArrayList<>(values), (int)(values.size() * 0.75));
     }
 
     /**
@@ -6647,6 +6647,44 @@ public class CellPhenotypeManagerPane {
 
         // 性能优化：使用快速选择找分位数，避免完整排序
         return quickSelect(new ArrayList<>(values), (int)(values.size() * 0.25));
+    }
+
+    /**
+     * Triangle算法计算阈值
+     */
+    private double calculateTriangleThreshold(List<Double> values) {
+        if (values.isEmpty()) {
+            return 100.0;
+        }
+
+        // 排序找最大值和最小值
+        List<Double> sortedValues = new ArrayList<>(values);
+        Collections.sort(sortedValues);
+
+        double min = sortedValues.get(0);
+        double max = sortedValues.get(sortedValues.size() - 1);
+
+        // 找最大频率值的位置
+        double mode = min;
+        int modeCount = 0;
+
+        for (int i = 1; i < sortedValues.size(); i++) {
+            if (sortedValues.get(i).equals(sortedValues.get(i - 1))) {
+                // Count frequency
+                int count = 2;
+                for (int j = i + 1; j < sortedValues.size() && sortedValues.get(j).equals(sortedValues.get(i)); j++) {
+                    count++;
+                }
+                if (count > modeCount) {
+                    modeCount = count;
+                    mode = sortedValues.get(i);
+                }
+                i = i + count - 1;
+            }
+        }
+
+        // Triangle算法：阈值 = mode + (max - mode) * 0.5
+        return mode + (max - mode) * 0.5;
     }
 
     /**
