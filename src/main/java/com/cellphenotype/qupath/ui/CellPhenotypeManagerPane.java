@@ -6585,7 +6585,7 @@ public class CellPhenotypeManagerPane {
 
             int cellsInThisROI = 0;
 
-            // Check each cell using simple center-point method
+            // Check each cell using center-point method with tolerance for boundary cells
             for (var cell : allCells) {
                 if (!cell.hasROI()) continue;
 
@@ -6595,21 +6595,47 @@ public class CellPhenotypeManagerPane {
                 double cellCX = cellROI.getCentroidX();
                 double cellCY = cellROI.getCentroidY();
 
-                // Use simple contains check
+                // Use contains check with tolerance for boundary precision issues
+                boolean inside = false;
                 try {
-                    boolean inside = roi.contains(cellCX, cellCY);
+                    inside = roi.contains(cellCX, cellCY);
 
-                    if (inside) {
-                        cellsInROI.add(cell);
-                        cellsInThisROI++;
+                    // v1.7.8: 如果第一次检测失败（可能是边界精度问题），尝试容差检测
+                    if (!inside) {
+                        // 计算细胞中心到ROI中心的距离
+                        double roiCenterX = roi.getBoundsX() + roi.getBoundsWidth() / 2;
+                        double roiCenterY = roi.getBoundsY() + roi.getBoundsHeight() / 2;
 
-                        if (cellsInThisROI <= 5) {
-                            logger.info("  Cell[{}]: center=({:.2f},{:.2f}) - IN ROI",
-                                       cellsInThisROI, cellCX, cellCY);
+                        // 对于圆形/椭圆形ROI，使用距离检测
+                        double distance = Math.sqrt(
+                            Math.pow(cellCX - roiCenterX, 2) +
+                            Math.pow(cellCY - roiCenterY, 2)
+                        );
+
+                        // ROI的半径（使用平均半径）
+                        double roiRadius = Math.min(roi.getBoundsWidth(), roi.getBoundsHeight()) / 2;
+
+                        // 允许0.5像素的容差（对于浮点精度问题）
+                        if (distance <= roiRadius + 0.5) {
+                            inside = true;
+                            if (cellsInThisROI <= 5) {
+                                logger.info("  Cell[{}]: center=({:.2f},{:.2f}) - IN ROI (tolerance check)",
+                                           cellsInThisROI, cellCX, cellCY);
+                            }
                         }
                     }
                 } catch (Exception e) {
                     logger.error("Error checking cell at ({}, {}): {}", cellCX, cellCY, e.getMessage());
+                }
+
+                if (inside) {
+                    cellsInROI.add(cell);
+                    cellsInThisROI++;
+
+                    if (cellsInThisROI <= 5) {
+                        logger.info("  Cell[{}]: center=({:.2f},{:.2f}) - IN ROI",
+                                   cellsInThisROI, cellCX, cellCY);
+                    }
                 }
             }
 
