@@ -6480,7 +6480,7 @@ public class CellPhenotypeManagerPane {
 
     /**
      * Get cells within currently selected ROI(s)
-     * v1.7.6: 简化版本，使用最可靠的方法
+     * v1.7.7: 修复版本 - 确保与QuPath Num Detections完全一致
      */
     private List<qupath.lib.objects.PathObject> getCellsInSelectedROI(ImageData<?> imageData) {
         // Check if ROI mode is enabled
@@ -6499,33 +6499,30 @@ public class CellPhenotypeManagerPane {
             .collect(Collectors.toList());
 
         if (selectedROIs.isEmpty()) {
-            logger.warn("No ROI selected, processing all cells");
+            logger.warn("v1.7.7: No ROI selected, processing all cells");
             return new ArrayList<>(hierarchy.getDetectionObjects());
         }
 
-        // Get all cells
+        // Get all cells directly from hierarchy (same as threshold calculation)
         List<qupath.lib.objects.PathObject> allCells = new ArrayList<>(hierarchy.getDetectionObjects());
         List<qupath.lib.objects.PathObject> cellsInROI = new ArrayList<>();
 
-        logger.info("=== v1.7.6 Simple Detection ===");
-        logger.info("Total cells: {}", allCells.size());
+        logger.info("=== v1.7.7 Reliable Detection ===");
+        logger.info("Total cells in hierarchy: {}", allCells.size());
         logger.info("Selected ROIs: {}", selectedROIs.size());
 
-        // For each ROI, collect cells
-        for (var roiObject : selectedROIs) {
+        // Process each ROI
+        for (int roiIdx = 0; roiIdx < selectedROIs.size(); roiIdx++) {
+            var roiObject = selectedROIs.get(roiIdx);
             var roi = roiObject.getROI();
             if (roi == null) continue;
 
-            double roiX = roi.getBoundsX();
-            double roiY = roi.getBoundsY();
-            double roiW = roi.getBoundsWidth();
-            double roiH = roi.getBoundsHeight();
-
-            logger.info("ROI bounds: X={}, Y={}, W={}, H={}", roiX, roiY, roiW, roiH);
+            logger.info("Processing ROI[{}]: bounds=({:.2f},{:.2f},{:.2f},{:.2f})", 
+                       roiIdx, roi.getBoundsX(), roi.getBoundsY(), roi.getBoundsWidth(), roi.getBoundsHeight());
 
             int cellsInThisROI = 0;
             
-            // Check each cell
+            // Check each cell using simple center-point method
             for (var cell : allCells) {
                 if (!cell.hasROI()) continue;
                 
@@ -6535,57 +6532,28 @@ public class CellPhenotypeManagerPane {
                 double cellCX = cellROI.getCentroidX();
                 double cellCY = cellROI.getCentroidY();
 
-                // Check if cell center is inside ROI
+                // Use simple contains check
                 try {
-                    // First try the contains method
                     boolean inside = roi.contains(cellCX, cellCY);
-                    
-                    // If contains returns false, check if it's very close to the boundary
-                    if (!inside) {
-                        // For circular/elliptical ROIs, do an additional check with small tolerance
-                        double tolerance = 0.5; // 0.5 pixel tolerance
-                        
-                        // Check if cell center is within ROI bounds with tolerance
-                        boolean withinBounds = 
-                            cellCX >= (roiX - tolerance) && 
-                            cellCX <= (roiX + roiW + tolerance) &&
-                            cellCY >= (roiY - tolerance) && 
-                            cellCY <= (roiY + roiH + tolerance);
-                        
-                        if (withinBounds) {
-                            // Additional check for circular/elliptical ROIs
-                            double roiCenterX = roiX + roiW / 2.0;
-                            double roiCenterY = roiY + roiH / 2.0;
-                            double distance = Math.sqrt(
-                                Math.pow(cellCX - roiCenterX, 2) + 
-                                Math.pow(cellCY - roiCenterY, 2)
-                            );
-                            double maxDistance = Math.sqrt(roiW * roiW + roiH * roiH) / 2.0;
-                            
-                            if (distance <= maxDistance + tolerance) {
-                                inside = true;
-                            }
-                        }
-                    }
                     
                     if (inside) {
                         cellsInROI.add(cell);
                         cellsInThisROI++;
                         
-                        if (cellsInThisROI <= 3) {
-                            logger.info("  Cell[{}]: center=({:.2f},{:.2f})", 
+                        if (cellsInThisROI <= 5) {
+                            logger.info("  Cell[{}]: center=({:.2f},{:.2f}) - IN ROI", 
                                        cellsInThisROI, cellCX, cellCY);
                         }
                     }
                 } catch (Exception e) {
-                    logger.error("Error checking cell: {}", e.getMessage());
+                    logger.error("Error checking cell at ({}, {}): {}", cellCX, cellCY, e.getMessage());
                 }
             }
             
-            logger.info("ROI contains {} cells", cellsInThisROI);
+            logger.info("ROI[{}] contains {} cells", roiIdx, cellsInThisROI);
         }
 
-        logger.info("=== v1.7.6 Result: {} cells ===", cellsInROI.size());
+        logger.info("=== v1.7.7 Result: {} cells found ===", cellsInROI.size());
         return cellsInROI;
     }
 
@@ -6617,7 +6585,6 @@ public class CellPhenotypeManagerPane {
             return 100.0;
         }
 
-        // 性能优化：单次遍历计算均值和方差（Welford算法）
         int n = values.size();
         double mean = 0;
         double m2 = 0;
@@ -6633,7 +6600,6 @@ public class CellPhenotypeManagerPane {
         double variance = n > 1 ? m2 / (n - 1) : 0;
         double stdDev = Math.sqrt(variance);
 
-        // 使用均值加偏移（避免排序找中位数）
         return mean + stdDev * 0.5;
     }
 
@@ -6644,9 +6610,52 @@ public class CellPhenotypeManagerPane {
         if (values.isEmpty()) {
             return 100.0;
         }
-
-        // 性能优化：使用快速选择找分位数，避免完整排序
         return quickSelect(new ArrayList<>(values), (int)(values.size() * 0.25));
+    }
+
+    /**
+     * 快速选择算法
+     */
+    private double quickSelect(List<Double> arr, int k) {
+        if (arr.size() == 1) return arr.get(0);
+        if (k >= arr.size()) return arr.get(arr.size() - 1);
+        if (k < 0) return arr.get(0);
+
+        int left = 0;
+        int right = arr.size() - 1;
+
+        while (true) {
+            if (left == right) return arr.get(left);
+
+            int pivotIndex = left + (right - left) / 2;
+            pivotIndex = partition(arr, left, right, pivotIndex);
+
+            if (k == pivotIndex) return arr.get(k);
+            else if (k < pivotIndex) right = pivotIndex - 1;
+            else left = pivotIndex + 1;
+        }
+    }
+
+    private int partition(List<Double> arr, int left, int right, int pivotIndex) {
+        double pivotValue = arr.get(pivotIndex);
+        swap(arr, pivotIndex, right);
+        int storeIndex = left;
+
+        for (int i = left; i < right; i++) {
+            if (arr.get(i) < pivotValue) {
+                swap(arr, storeIndex, i);
+                storeIndex++;
+            }
+        }
+
+        swap(arr, right, storeIndex);
+        return storeIndex;
+    }
+
+    private void swap(List<Double> arr, int i, int j) {
+        double temp = arr.get(i);
+        arr.set(i, arr.get(j));
+        arr.set(j, temp);
     }
 
     /**
@@ -6691,50 +6700,6 @@ public class CellPhenotypeManagerPane {
      * 快速选择算法：O(N)时间复杂度找第k小的元素
      * 避免完整排序 O(N log N)
      */
-    private double quickSelect(List<Double> arr, int k) {
-        if (arr.size() == 1) return arr.get(0);
-        if (k >= arr.size()) return arr.get(arr.size() - 1);
-        if (k < 0) return arr.get(0);
-
-        int left = 0;
-        int right = arr.size() - 1;
-
-        while (left < right) {
-            int pivotIndex = partition(arr, left, right);
-            if (pivotIndex == k) {
-                return arr.get(k);
-            } else if (pivotIndex < k) {
-                left = pivotIndex + 1;
-            } else {
-                right = pivotIndex - 1;
-            }
-        }
-
-        return arr.get(k);
-    }
-
-    private int partition(List<Double> arr, int left, int right) {
-        double pivot = arr.get(right);
-        int i = left;
-
-        for (int j = left; j < right; j++) {
-            if (arr.get(j) <= pivot) {
-                // Swap arr[i] and arr[j]
-                double temp = arr.get(i);
-                arr.set(i, arr.get(j));
-                arr.set(j, temp);
-                i++;
-            }
-        }
-
-        // Swap arr[i] and arr[right]
-        double temp = arr.get(i);
-        arr.set(i, arr.get(right));
-        arr.set(right, temp);
-
-        return i;
-    }
-
     private double calculateOtsuThreshold(List<Double> values) {
         if (values.isEmpty()) {
             return 100.0;
