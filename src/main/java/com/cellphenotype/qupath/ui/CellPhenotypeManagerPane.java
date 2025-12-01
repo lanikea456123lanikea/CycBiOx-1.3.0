@@ -2275,32 +2275,21 @@ public class CellPhenotypeManagerPane {
             }
 
             var hierarchy = imageData.getHierarchy();
-            var allCells = hierarchy.getDetectionObjects();
-            var selectedROIs = hierarchy.getSelectionModel().getSelectedObjects()
-                    .stream()
-                    .filter(obj -> obj.getROI() != null && obj.isAnnotation())
-                    .collect(Collectors.toList());
 
             String selectedMode = cellAnalysisComboBox != null ? cellAnalysisComboBox.getValue() : "全部细胞";
 
             if ("当前选中细胞".equals(selectedMode)) {
-                if (selectedROIs.isEmpty()) {
-                    statisticsLabel.setText("统计信息: 未选中ROI区域，将分析全部 " + allCells.size() + " 个细胞");
+                // v1.7.8: 使用与getCellsInSelectedROI相同的逻辑
+                List<qupath.lib.objects.PathObject> cellsToProcess = getCellsInSelectedROI(imageData);
+                if (cellsToProcess.isEmpty()) {
+                    var selectedObjects = hierarchy.getSelectionModel().getSelectedObjects();
+                    logger.info("v1.7.8 DEBUG updateStatisticsDisplay: 选中对象总数: {}", selectedObjects.size());
+                    statisticsLabel.setText("统计信息: 未选中任何对象，将分析全部 " + hierarchy.getDetectionObjects().size() + " 个细胞");
                 } else {
-                    // Count cells within selected ROIs
-                    int cellsInROI = 0;
-                    for (var cell : allCells) {
-                        for (var roi : selectedROIs) {
-                            if (roi.getROI().contains(cell.getROI().getCentroidX(), cell.getROI().getCentroidY())) {
-                                cellsInROI++;
-                                break;
-                            }
-                        }
-                    }
-                    statisticsLabel.setText("统计信息: 已选中 " + selectedROIs.size() + " 个ROI区域，包含 " + cellsInROI + " 个细胞");
+                    statisticsLabel.setText("统计信息: 已选中 " + cellsToProcess.size() + " 个细胞");
                 }
             } else {
-                statisticsLabel.setText("统计信息: 将分析全部 " + allCells.size() + " 个细胞");
+                statisticsLabel.setText("统计信息: 将分析全部 " + hierarchy.getDetectionObjects().size() + " 个细胞");
             }
         } catch (Exception e) {
             statisticsLabel.setText("统计信息: 获取统计信息失败");
@@ -4068,11 +4057,12 @@ public class CellPhenotypeManagerPane {
     /**
      * 为未分类的细胞应用灰色伪彩
      * 修复：同时处理PathClass为null和PathClass为"Unclassified"的情况
+     * v1.7.8: 修复 - 支持ROI模式
      */
     private void applyGrayColorToUnclassifiedCells(ImageData<?> imageData) {
         try {
-            var hierarchy = imageData.getHierarchy();
-            Collection<qupath.lib.objects.PathObject> cells = hierarchy.getDetectionObjects();
+            // v1.7.8: 修复 - 使用getCellsInSelectedROI，支持ROI模式
+            Collection<qupath.lib.objects.PathObject> cells = getCellsInSelectedROI(imageData);
 
             int unclassifiedCount = 0;
             Integer grayColor = 0xFF808080; // 灰色 RGB(128, 128, 128)
@@ -4100,7 +4090,7 @@ public class CellPhenotypeManagerPane {
             }
 
             // 更新显示
-            hierarchy.fireHierarchyChangedEvent(null);
+            imageData.getHierarchy().fireHierarchyChangedEvent(null);
 
             if (unclassifiedCount > 0) {
                 logger.info("已为{}个未分类细胞应用灰色伪彩", unclassifiedCount);
@@ -4177,8 +4167,8 @@ public class CellPhenotypeManagerPane {
 
             // 使用现有的导出方法或创建简单导出
             try {
-                var hierarchy = imageData.getHierarchy();
-                var cells = hierarchy.getDetectionObjects();
+                // v1.7.8: 修复 - 使用getCellsInSelectedROI，支持ROI模式
+                var cells = getCellsInSelectedROI(imageData);
 
                 StringBuilder csvContent = new StringBuilder();
                 // v1.4.0: 添加UTF-8 BOM标记，帮助Excel等软件正确识别UTF-8编码
@@ -4205,8 +4195,7 @@ public class CellPhenotypeManagerPane {
             } catch (Exception exportEx) {
                 logger.warn("CSV导出失败，使用备用方法: {}", exportEx.getMessage());
                 // 备用：只显示统计信息
-                var hierarchy = imageData.getHierarchy();
-                int totalCells = hierarchy.getDetectionObjects().size();
+                int totalCells = getCellsInSelectedROI(imageData).size();
 
                 showAlert(Alert.AlertType.INFORMATION, "导出完成",
                     String.format("分类统计：\n总细胞数: %d\n详细CSV导出功能开发中", totalCells));
@@ -6496,13 +6485,15 @@ public class CellPhenotypeManagerPane {
 
 
     /**
-     * Get cells within currently selected ROI(s)
-     * v1.7.7: 修复版本 - 确保与QuPath Num Detections完全一致
+     * Get cells within currently selected objects
+     * v1.7.8: 修复版本 - 支持两种模式：
+     * 1. 用户直接选中的细胞对象
+     * 2. ROI内的细胞对象
      */
     private List<qupath.lib.objects.PathObject> getCellsInSelectedROI(ImageData<?> imageData) {
         // Check if imageData is null first
         if (imageData == null) {
-            logger.warn("v1.7.7: ImageData is null, returning empty list");
+            logger.warn("v1.7.8: ImageData is null, returning empty list");
             return new ArrayList<>();
         }
 
@@ -6513,28 +6504,52 @@ public class CellPhenotypeManagerPane {
 
         // If not in ROI mode, return all cells
         if (!isRoiMode) {
-            logger.info("v1.7.7: All cells mode - processing all {} cells", hierarchy.getDetectionObjects().size());
+            logger.info("v1.7.8: All cells mode - processing all {} cells", hierarchy.getDetectionObjects().size());
             return new ArrayList<>(hierarchy.getDetectionObjects());
         }
 
-        // ROI mode - get selected ROI objects
+        // ROI mode - check what user has selected in QuPath
         var selectedObjects = hierarchy.getSelectionModel().getSelectedObjects();
+
+        // v1.7.8: 添加详细调试信息
+        logger.info("=== v1.7.8 DEBUG: 用户选中对象分析 ===");
+        logger.info("v1.7.8 DEBUG: 选中对象总数: {}", selectedObjects.size());
+
+        // 统计不同类型的对象
+        long detectionCount = selectedObjects.stream().filter(obj -> obj.isDetection()).count();
+        long annotationCount = selectedObjects.stream().filter(obj -> obj.hasROI() && !obj.isDetection()).count();
+        long otherCount = selectedObjects.size() - detectionCount - annotationCount;
+
+        logger.info("v1.7.8 DEBUG: 其中检测对象(细胞): {}个, 注释对象(ROI): {}个, 其他: {}个",
+                   detectionCount, annotationCount, otherCount);
+
+        // Case 1: User has directly selected cells in QuPath (most common case)
+        List<qupath.lib.objects.PathObject> selectedCells = selectedObjects.stream()
+            .filter(obj -> obj.isDetection())  // Only detection objects (cells)
+            .collect(Collectors.toList());
+
+        if (!selectedCells.isEmpty()) {
+            logger.info("v1.7.8: 用户直接选中了 {} 个细胞对象", selectedCells.size());
+            return selectedCells;
+        }
+
+        // Case 2: User has selected ROI objects - detect cells within ROI
         List<qupath.lib.objects.PathObject> selectedROIs = selectedObjects.stream()
             .filter(obj -> obj.hasROI() && !obj.isDetection())
             .collect(Collectors.toList());
 
-        // v1.7.8: 修复 - 如果用户选择"当前选中细胞"但没有选中ROI，应该报错而不是返回所有细胞
-        if (selectedROIs.isEmpty()) {
-            logger.error("v1.7.8: 用户选择了'当前选中细胞'模式，但没有选中任何ROI区域！无法处理。");
-            showAlert(Alert.AlertType.WARNING, "警告", "您选择了'当前选中细胞'模式，但没有选中任何ROI区域。\n\n请先在QuPath中选择一个ROI区域，然后重试。");
+        // v1.7.8: 如果用户选择"当前选中细胞"但没有选中任何对象，应该报错
+        if (selectedROIs.isEmpty() && selectedCells.isEmpty()) {
+            logger.error("v1.7.8: 用户选择了'当前选中细胞'模式，但没有在QuPath中选中任何对象！");
+            showAlert(Alert.AlertType.WARNING, "警告", "您选择了'当前选中细胞'模式，但在QuPath中没有选中任何对象。\n\n请先在QuPath中选择细胞或ROI区域，然后重试。");
             return new ArrayList<>();  // 返回空列表，不处理任何细胞
         }
 
-        // Get all cells directly from hierarchy (same as threshold calculation)
+        // Case 3: Process cells within selected ROI(s)
         List<qupath.lib.objects.PathObject> allCells = new ArrayList<>(hierarchy.getDetectionObjects());
         List<qupath.lib.objects.PathObject> cellsInROI = new ArrayList<>();
 
-        logger.info("=== v1.7.7 Reliable Detection ===");
+        logger.info("=== v1.7.8 ROI Detection ===");
         logger.info("Total cells in hierarchy: {}", allCells.size());
         logger.info("Selected ROIs: {}", selectedROIs.size());
 
@@ -6544,15 +6559,15 @@ public class CellPhenotypeManagerPane {
             var roi = roiObject.getROI();
             if (roi == null) continue;
 
-            logger.info("Processing ROI[{}]: bounds=({:.2f},{:.2f},{:.2f},{:.2f})", 
+            logger.info("Processing ROI[{}]: bounds=({:.2f},{:.2f},{:.2f},{:.2f})",
                        roiIdx, roi.getBoundsX(), roi.getBoundsY(), roi.getBoundsWidth(), roi.getBoundsHeight());
 
             int cellsInThisROI = 0;
-            
+
             // Check each cell using simple center-point method
             for (var cell : allCells) {
                 if (!cell.hasROI()) continue;
-                
+
                 var cellROI = cell.getROI();
                 if (cellROI == null) continue;
 
@@ -6562,13 +6577,13 @@ public class CellPhenotypeManagerPane {
                 // Use simple contains check
                 try {
                     boolean inside = roi.contains(cellCX, cellCY);
-                    
+
                     if (inside) {
                         cellsInROI.add(cell);
                         cellsInThisROI++;
-                        
+
                         if (cellsInThisROI <= 5) {
-                            logger.info("  Cell[{}]: center=({:.2f},{:.2f}) - IN ROI", 
+                            logger.info("  Cell[{}]: center=({:.2f},{:.2f}) - IN ROI",
                                        cellsInThisROI, cellCX, cellCY);
                         }
                     }
@@ -6576,11 +6591,11 @@ public class CellPhenotypeManagerPane {
                     logger.error("Error checking cell at ({}, {}): {}", cellCX, cellCY, e.getMessage());
                 }
             }
-            
+
             logger.info("ROI[{}] contains {} cells", roiIdx, cellsInThisROI);
         }
 
-        logger.info("=== v1.7.7 Result: {} cells found ===", cellsInROI.size());
+        logger.info("=== v1.7.8 Result: {} cells found ===", cellsInROI.size());
         return cellsInROI;
     }
 
