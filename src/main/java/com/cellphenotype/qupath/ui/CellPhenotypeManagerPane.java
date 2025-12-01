@@ -2675,13 +2675,16 @@ public class CellPhenotypeManagerPane {
 
         try {
             var hierarchy = imageData.getHierarchy();
-            var cells = hierarchy.getDetectionObjects();
+
+            // v1.7.8: 修复 - 使用getCellsInSelectedROI，考虑ROI模式
+            var cells = getCellsInSelectedROI(imageData);
+
             if (cells.isEmpty()) {
                 showAlert(Alert.AlertType.WARNING, "警告",
                     "当前图像没有检测到细胞数据\n\n" +
                     "建议：\n" +
                     "1. 在QuPath中执行 Analyze > Cell detection\n" +
-                    "2. 或者切换到\"手动\"策略手动设置阈值");
+                    "2. 或者切换到\"手动\"���略手动设置阈值");
                 return;
             }
 
@@ -2993,7 +2996,10 @@ public class CellPhenotypeManagerPane {
             logger.info("=== 通道数据刷新完成 ===");
 
             var hierarchy = imageData.getHierarchy();
-            var cells = hierarchy.getDetectionObjects();
+
+            // v1.7.8: 修复 - 使用getCellsInSelectedROI，考虑ROI模式
+            var cells = getCellsInSelectedROI(imageData);
+
             if (cells.isEmpty()) {
                 logger.warn("无细胞数据，无法计算Auto阈值");
                 return;
@@ -3528,17 +3534,16 @@ public class CellPhenotypeManagerPane {
     private void clearPreview() {
         ImageData<?> imageData = qupath.getImageData();
         if (imageData == null) return;
-        
-        // Performance optimization for large datasets
-        var hierarchy = imageData.getHierarchy();
-        var allCells = new ArrayList<>(hierarchy.getDetectionObjects());
-        
+
+        // v1.7.8: 修复 - 使用getCellsInSelectedROI，考虑ROI模式
+        var allCells = getCellsInSelectedROI(imageData);
+
         // Clear all cells - high-performance 10M+ support with parallel processing
         logger.info("Clearing preview colors for {} cells using parallel processing", allCells.size());
         allCells.parallelStream().forEach(cell -> {
             cell.setColor(null); // Reset to default QuPath coloring
         });
-        
+
         Platform.runLater(() -> {
             if (qupath.getViewer() != null) {
                 qupath.getViewer().repaint();
@@ -6495,24 +6500,34 @@ public class CellPhenotypeManagerPane {
      * v1.7.7: 修复版本 - 确保与QuPath Num Detections完全一致
      */
     private List<qupath.lib.objects.PathObject> getCellsInSelectedROI(ImageData<?> imageData) {
-        // Check if ROI mode is enabled
-        boolean isRoiMode = cellAnalysisComboBox != null && "当前选中细胞".equals(cellAnalysisComboBox.getValue());
-
-        if (!isRoiMode || imageData == null) {
-            return new ArrayList<>(imageData.getHierarchy().getDetectionObjects());
+        // Check if imageData is null first
+        if (imageData == null) {
+            logger.warn("v1.7.7: ImageData is null, returning empty list");
+            return new ArrayList<>();
         }
 
         var hierarchy = imageData.getHierarchy();
 
-        // Get selected ROI objects
+        // Check if ROI mode is enabled
+        boolean isRoiMode = cellAnalysisComboBox != null && "当前选中细胞".equals(cellAnalysisComboBox.getValue());
+
+        // If not in ROI mode, return all cells
+        if (!isRoiMode) {
+            logger.info("v1.7.7: All cells mode - processing all {} cells", hierarchy.getDetectionObjects().size());
+            return new ArrayList<>(hierarchy.getDetectionObjects());
+        }
+
+        // ROI mode - get selected ROI objects
         var selectedObjects = hierarchy.getSelectionModel().getSelectedObjects();
         List<qupath.lib.objects.PathObject> selectedROIs = selectedObjects.stream()
             .filter(obj -> obj.hasROI() && !obj.isDetection())
             .collect(Collectors.toList());
 
+        // v1.7.8: 修复 - 如果用户选择"当前选中细胞"但没有选中ROI，应该报错而不是返回所有细胞
         if (selectedROIs.isEmpty()) {
-            logger.warn("v1.7.7: No ROI selected, processing all cells");
-            return new ArrayList<>(hierarchy.getDetectionObjects());
+            logger.error("v1.7.8: 用户选择了'当前选中细胞'模式，但没有选中任何ROI区域！无法处理。");
+            showAlert(Alert.AlertType.WARNING, "警告", "您选择了'当前选中细胞'模式，但没有选中任何ROI区域。\n\n请先在QuPath中选择一个ROI区域，然后重试。");
+            return new ArrayList<>();  // 返回空列表，不处理任何细胞
         }
 
         // Get all cells directly from hierarchy (same as threshold calculation)
