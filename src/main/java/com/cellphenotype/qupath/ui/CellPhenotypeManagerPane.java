@@ -6529,63 +6529,71 @@ public class CellPhenotypeManagerPane {
             return new ArrayList<>(hierarchy.getDetectionObjects());
         }
 
-        // ROI mode - check what user has selected in QuPath
+        // ROI mode - Get what user has selected in QuPath
         var selectedObjects = hierarchy.getSelectionModel().getSelectedObjects();
 
-        // v1.7.8: 添加详细调试信息
-        logger.info("=== v1.7.8 DEBUG: 用户选中对象分析 ===");
-        logger.info("v1.7.8 DEBUG: 选中对象总数: {}", selectedObjects.size());
+        logger.info("=== v1.7.8 Native QuPath Data Direct Reading ===");
+        logger.info("v1.7.8: QuPath显示选中对象: {} 个", selectedObjects.size());
 
-        // 统计不同类型的对象
+        // v1.7.8: 直接读取QuPath SelectionModel中的对象，不再重新实现检测
+        // Check what types of objects are selected
         long detectionCount = selectedObjects.stream().filter(obj -> obj.isDetection()).count();
         long annotationCount = selectedObjects.stream().filter(obj -> obj.hasROI() && !obj.isDetection()).count();
-        long otherCount = selectedObjects.size() - detectionCount - annotationCount;
 
-        logger.info("v1.7.8 DEBUG: 其中检测对象(细胞): {}个, 注释对象(ROI): {}个, 其他: {}个",
-                   detectionCount, annotationCount, otherCount);
+        logger.info("v1.7.8: 其中检测对象(细胞): {} 个, 注释对象(ROI): {} 个",
+                   detectionCount, annotationCount);
 
-        // Case 1: User has directly selected cells in QuPath (most common case)
+        // Case 1: User has directly selected cells in QuPath
         List<qupath.lib.objects.PathObject> selectedCells = selectedObjects.stream()
-            .filter(obj -> obj.isDetection())  // Only detection objects (cells)
+            .filter(obj -> obj.isDetection())
             .collect(Collectors.toList());
 
         if (!selectedCells.isEmpty()) {
-            logger.info("v1.7.8: 用户直接选中了 {} 个细胞对象", selectedCells.size());
+            logger.info("v1.7.8: 直接使用用户选中的 {} 个细胞 (来自QuPath SelectionModel)", selectedCells.size());
             return selectedCells;
         }
 
-        // Case 2: User has selected ROI objects - detect cells within ROI
+        // Case 2: User has selected ROI object(s)
         List<qupath.lib.objects.PathObject> selectedROIs = selectedObjects.stream()
             .filter(obj -> obj.hasROI() && !obj.isDetection())
             .collect(Collectors.toList());
 
-        // v1.7.8: 如果用户选择"当前选中细胞"但没有选中任何对象，应该报错
-        if (selectedROIs.isEmpty() && selectedCells.isEmpty()) {
+        if (selectedROIs.isEmpty()) {
             logger.error("v1.7.8: 用户选择了'当前选中细胞'模式，但没有在QuPath中选中任何对象！");
             showAlert(Alert.AlertType.WARNING, "警告", "您选择了'当前选中细胞'模式，但在QuPath中没有选中任何对象。\n\n请先在QuPath中选择细胞或ROI区域，然后重试。");
-            return new ArrayList<>();  // 返回空列表，不处理任何细胞
+            return new ArrayList<>();
         }
 
-        // Case 3: Process cells within selected ROI(s)
+        // v1.7.8: 核心修复 - 直接使用QuPath SelectionModel中的对象
+        // 当用户选中ROI时，QuPath内部已经计算了ROI内的对象
+        // 我们直接使用SelectionModel中已选中的对象，不再重新检测
+
+        // 统计所有选中的对象（可能是ROI自动选中的细胞）
+        List<qupath.lib.objects.PathObject> allSelected = new ArrayList<>(selectedObjects);
+
+        // 过滤出细胞对象
+        List<qupath.lib.objects.PathObject> cellsFromSelection = allSelected.stream()
+            .filter(obj -> obj.isDetection())
+            .collect(Collectors.toList());
+
+        // 如果SelectionModel中有细胞对象，直接返回
+        if (!cellsFromSelection.isEmpty()) {
+            logger.info("v1.7.8: ROI模式下，QuPath已自动选择 {} 个细胞对象，直接使用", cellsFromSelection.size());
+            return cellsFromSelection;
+        }
+
+        // 如果SelectionModel中只有ROI对象，没有细胞，说明QuPath没有自动选中ROI内的细胞
+        // 这种情况需要用简单的方法检测ROI内的细胞，但不重新实现复杂逻辑
+        logger.info("v1.7.8: QuPath SelectionModel中只有ROI对象，没有自动选中的细胞，使用简单检测");
+
         List<qupath.lib.objects.PathObject> allCells = new ArrayList<>(hierarchy.getDetectionObjects());
         List<qupath.lib.objects.PathObject> cellsInROI = new ArrayList<>();
 
-        logger.info("=== v1.7.8 ROI Detection ===");
-        logger.info("Total cells in hierarchy: {}", allCells.size());
-        logger.info("Selected ROIs: {}", selectedROIs.size());
-
-        // Process each ROI
-        for (int roiIdx = 0; roiIdx < selectedROIs.size(); roiIdx++) {
-            var roiObject = selectedROIs.get(roiIdx);
+        // 简单检测：检查每个细胞的中心点是否在ROI内
+        for (var roiObject : selectedROIs) {
             var roi = roiObject.getROI();
             if (roi == null) continue;
 
-            logger.info("Processing ROI[{}]: bounds=({:.2f},{:.2f},{:.2f},{:.2f})",
-                       roiIdx, roi.getBoundsX(), roi.getBoundsY(), roi.getBoundsWidth(), roi.getBoundsHeight());
-
-            int cellsInThisROI = 0;
-
-            // Check each cell using center-point method with tolerance for boundary cells
             for (var cell : allCells) {
                 if (!cell.hasROI()) continue;
 
@@ -6595,54 +6603,16 @@ public class CellPhenotypeManagerPane {
                 double cellCX = cellROI.getCentroidX();
                 double cellCY = cellROI.getCentroidY();
 
-                // Use contains check with tolerance for boundary precision issues
-                boolean inside = false;
-                try {
-                    inside = roi.contains(cellCX, cellCY);
-
-                    // v1.7.8: 如果第一次检测失败（可能是边界精度问题），尝试容差检测
-                    if (!inside) {
-                        // 计算细胞中心到ROI中心的距离
-                        double roiCenterX = roi.getBoundsX() + roi.getBoundsWidth() / 2;
-                        double roiCenterY = roi.getBoundsY() + roi.getBoundsHeight() / 2;
-
-                        // 对于圆形/椭圆形ROI，使用距离检测
-                        double distance = Math.sqrt(
-                            Math.pow(cellCX - roiCenterX, 2) +
-                            Math.pow(cellCY - roiCenterY, 2)
-                        );
-
-                        // ROI的半径（使用平均半径）
-                        double roiRadius = Math.min(roi.getBoundsWidth(), roi.getBoundsHeight()) / 2;
-
-                        // 允许0.5像素的容差（对于浮点精度问题）
-                        if (distance <= roiRadius + 0.5) {
-                            inside = true;
-                            if (cellsInThisROI <= 5) {
-                                logger.info("  Cell[{}]: center=({:.2f},{:.2f}) - IN ROI (tolerance check)",
-                                           cellsInThisROI, cellCX, cellCY);
-                            }
-                        }
-                    }
-                } catch (Exception e) {
-                    logger.error("Error checking cell at ({}, {}): {}", cellCX, cellCY, e.getMessage());
-                }
+                // 使用QuPath原生的contains方法
+                boolean inside = roi.contains(cellCX, cellCY);
 
                 if (inside) {
                     cellsInROI.add(cell);
-                    cellsInThisROI++;
-
-                    if (cellsInThisROI <= 5) {
-                        logger.info("  Cell[{}]: center=({:.2f},{:.2f}) - IN ROI",
-                                   cellsInThisROI, cellCX, cellCY);
-                    }
                 }
             }
-
-            logger.info("ROI[{}] contains {} cells", roiIdx, cellsInThisROI);
         }
 
-        logger.info("=== v1.7.8 Result: {} cells found ===", cellsInROI.size());
+        logger.info("v1.7.8: 检测到 {} 个细胞在ROI内 (简单检测模式)", cellsInROI.size());
         return cellsInROI;
     }
 
