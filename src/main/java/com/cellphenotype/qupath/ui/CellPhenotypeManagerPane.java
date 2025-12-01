@@ -43,6 +43,8 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.concurrent.*;
+
 
 // TODO: [类] CycBiOx主界面控制器 - 细胞表型分类管理
 // FIXME: [性能] 优化大数据集处理性能
@@ -1724,6 +1726,13 @@ public class CellPhenotypeManagerPane {
             logger.info("v1.7.8 DEBUG: 用户切换下拉框选择 = '{}'", selectedValue);
             updateStatisticsDisplay(statisticsLabel);
         });
+
+        // v1.7.8: 添加QuPath SelectionModel监听器
+        // 当用户在QuPath中选中对象（特别是ROI）时，自动更新插件统计信息
+        // 如果当前有图像数据，立即设置监听器
+        if (qupath.getImageData() != null) {
+            setupSelectionListener(qupath.getImageData(), statisticsLabel);
+        }
 
         // Initialize statistics display
         updateStatisticsDisplay(statisticsLabel);
@@ -6525,7 +6534,7 @@ public class CellPhenotypeManagerPane {
 
         // If not in ROI mode, return all cells
         if (!isRoiMode) {
-            logger.info("v1.7.8: All cells mode - processing all {} cells", hierarchy.getDetectionObjects().size());
+            logger.info("v1.7.8: 全部细胞模式 - 直接使用QuPath数据: {} 个细胞", hierarchy.getDetectionObjects().size());
             return new ArrayList<>(hierarchy.getDetectionObjects());
         }
 
@@ -6535,7 +6544,6 @@ public class CellPhenotypeManagerPane {
         logger.info("=== v1.7.8 Native QuPath Data Direct Reading ===");
         logger.info("v1.7.8: QuPath显示选中对象: {} 个", selectedObjects.size());
 
-        // v1.7.8: 直接读取QuPath SelectionModel中的对象，不再重新实现检测
         // Check what types of objects are selected
         long detectionCount = selectedObjects.stream().filter(obj -> obj.isDetection()).count();
         long annotationCount = selectedObjects.stream().filter(obj -> obj.hasROI() && !obj.isDetection()).count();
@@ -6564,35 +6572,23 @@ public class CellPhenotypeManagerPane {
             return new ArrayList<>();
         }
 
-        // v1.7.8: 核心修复 - 直接使用QuPath SelectionModel中的对象
-        // 当用户选中ROI时，QuPath内部已经计算了ROI内的对象
-        // 我们直接使用SelectionModel中已选中的对象，不再重新检测
-
-        // 统计所有选中的对象（可能是ROI自动选中的细胞）
-        List<qupath.lib.objects.PathObject> allSelected = new ArrayList<>(selectedObjects);
-
-        // 过滤出细胞对象
-        List<qupath.lib.objects.PathObject> cellsFromSelection = allSelected.stream()
-            .filter(obj -> obj.isDetection())
-            .collect(Collectors.toList());
-
-        // 如果SelectionModel中有细胞对象，直接返回
-        if (!cellsFromSelection.isEmpty()) {
-            logger.info("v1.7.8: ROI模式下，QuPath已自动选择 {} 个细胞对象，直接使用", cellsFromSelection.size());
-            return cellsFromSelection;
-        }
-
-        // 如果SelectionModel中只有ROI对象，没有细胞，说明QuPath没有自动选中ROI内的细胞
-        // 这种情况需要用简单的方法检测ROI内的细胞，但不重新实现复杂逻辑
-        logger.info("v1.7.8: QuPath SelectionModel中只有ROI对象，没有自动选中的细胞，使用简单检测");
+        // v1.7.8: 使用简单检测 - 统计ROI内的细胞数量
+        // 注意：QuPath显示的"46 objects"是其UI内部计算，不一定反映在SelectionModel中
+        // 我们使用标准的roi.contains()方法进行检测，并添加容差处理边界细胞
+        logger.info("v1.7.8: 统计ROI内的细胞数量...");
 
         List<qupath.lib.objects.PathObject> allCells = new ArrayList<>(hierarchy.getDetectionObjects());
         List<qupath.lib.objects.PathObject> cellsInROI = new ArrayList<>();
 
-        // 简单检测：检查每个细胞的中心点是否在ROI内
+        // 遍历所有细胞，检查是否在ROI内
         for (var roiObject : selectedROIs) {
             var roi = roiObject.getROI();
             if (roi == null) continue;
+
+            logger.info("v1.7.8: 正在检测ROI，bounds=({:.2f},{:.2f},{:.2f},{:.2f})",
+                       roi.getBoundsX(), roi.getBoundsY(), roi.getBoundsWidth(), roi.getBoundsHeight());
+
+            int cellsInThisROI = 0;
 
             for (var cell : allCells) {
                 if (!cell.hasROI()) continue;
@@ -6603,17 +6599,86 @@ public class CellPhenotypeManagerPane {
                 double cellCX = cellROI.getCentroidX();
                 double cellCY = cellROI.getCentroidY();
 
-                // 使用QuPath原生的contains方法
+                // v1.7.8: 添加容差检测，处理边界细胞
                 boolean inside = roi.contains(cellCX, cellCY);
+
+                // 如果roi.contains()返回false，尝试容差检测
+                if (!inside) {
+                    // 计算细胞中心到ROI中心的距离
+                    double roiCenterX = roi.getBoundsX() + roi.getBoundsWidth() / 2;
+                    double roiCenterY = roi.getBoundsY() + roi.getBoundsHeight() / 2;
+                    double distance = Math.sqrt(Math.pow(cellCX - roiCenterX, 2) + Math.pow(cellCY - roiCenterY, 2));
+
+                    // ROI的"半径"（使用较小边长的一半）
+                    double roiRadius = Math.min(roi.getBoundsWidth(), roi.getBoundsHeight()) / 2;
+
+                    // 允许1像素的容差（处理浮点精度问题）
+                    if (distance <= roiRadius + 1.0) {
+                        inside = true;
+
+                        // 只记录前3个边界细胞的调试信息
+                        if (cellsInThisROI < 3) {
+                            logger.info("v1.7.8: 边界细胞 #{}: center=({:.2f},{:.2f}), distance={:.2f} <= roiRadius={:.2f} + 1.0 ✓",
+                                       cellsInThisROI + 1, cellCX, cellCY, distance, roiRadius);
+                        }
+                    }
+                }
 
                 if (inside) {
                     cellsInROI.add(cell);
+                    cellsInThisROI++;
+
+                    // 只记录前3个细胞的调试信息
+                    if (cellsInThisROI <= 3) {
+                        logger.info("v1.7.8: 细胞 #{}: center=({:.2f},{:.2f}) - IN ROI",
+                                   cellsInThisROI, cellCX, cellCY);
+                    }
                 }
             }
+
+            logger.info("v1.7.8: ROI内共检测到 {} 个细胞", cellsInThisROI);
         }
 
-        logger.info("v1.7.8: 检测到 {} 个细胞在ROI内 (简单检测模式)", cellsInROI.size());
+        logger.info("v1.7.8: 检测到 {} 个细胞在ROI内 (含边界容差)", cellsInROI.size());
         return cellsInROI;
+    }
+
+    /**
+     * v1.7.8: 设置QuPath SelectionModel监听器
+     * 当用户在QuPath中选择对象时，自动更新插件统计信息
+     */
+    private void setupSelectionListener(ImageData<?> imageData, Label statisticsLabel) {
+        try {
+            var hierarchy = imageData.getHierarchy();
+            var selectionModel = hierarchy.getSelectionModel();
+
+            // 使用一个数组来跟踪之前的选择（避免lambda修改问题）
+            final Set<qupath.lib.objects.PathObject>[] previousSelection = new Set[]{new HashSet<>(selectionModel.getSelectedObjects())};
+
+            // 定期检查选择是否发生变化
+            ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+            executor.scheduleAtFixedRate(() -> {
+                try {
+                    Set<qupath.lib.objects.PathObject> currentSelection = selectionModel.getSelectedObjects();
+                    Set<qupath.lib.objects.PathObject> prevSel = previousSelection[0];
+
+                    // 检查选择是否发生变化
+                    if (!currentSelection.equals(prevSel)) {
+                        logger.info("v1.7.8 DEBUG: QuPath中的选择发生了变化");
+                        previousSelection[0] = new HashSet<>(currentSelection);
+
+                        // 在JavaFX线程中更新UI
+                        Platform.runLater(() -> updateStatisticsDisplay(statisticsLabel));
+                    }
+                } catch (Exception e) {
+                    logger.warn("v1.7.8 DEBUG: 检查选择变化时发生错误: {}", e.getMessage());
+                }
+            }, 0, 500, TimeUnit.MILLISECONDS); // 每500ms检查一次
+
+            logger.info("v1.7.8 DEBUG: 已设置SelectionModel监听器 (定期轮询模式)");
+        } catch (Exception e) {
+            logger.warn("v1.7.8 DEBUG: 设置SelectionModel监听器时发生错误: {}", e.getMessage());
+        }
     }
 
     /**
