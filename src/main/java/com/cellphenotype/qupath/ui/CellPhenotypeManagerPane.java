@@ -151,8 +151,8 @@ public class CellPhenotypeManagerPane {
     private ThresholdConfig currentConfig;
     private List<CellPhenotype> phenotypes;
 
-    // TODO: [功能] ROI支持
-    private boolean useSelectedROI = false;
+    // TODO: [功能] ROI支持 - v1.7.8已统一使用cellAnalysisComboBox控制
+    // 不再需要单独的roiModeCheckBox和useSelectedROI字段
     private CheckBox roiModeCheckBox;
 
     // TODO: [方法] 待优化方法
@@ -3752,16 +3752,20 @@ public class CellPhenotypeManagerPane {
             // Apply live preview with ROI support and optimization for large datasets
             try {
                 var hierarchy = imageData.getHierarchy();
-                
+
+                // v1.7.8: 修复 - 使用cellAnalysisComboBox的值，而不是未使用的useSelectedROI变量
+                String selectedMode = cellAnalysisComboBox != null ? cellAnalysisComboBox.getValue() : "全部细胞";
+                boolean isRoiMode = "当前选中细胞".equals(selectedMode);
+
                 // Use ROI-filtered cells if ROI mode is enabled
                 List<qupath.lib.objects.PathObject> targetCells;
-                if (useSelectedROI) {
+                if (isRoiMode) {
                     targetCells = getCellsInSelectedROI(imageData);
-                    logger.info("Live Preview: Using {} ROI-filtered cells for channel: {}", 
+                    logger.info("Live Preview: Using {} ROI-filtered cells for channel: {}",
                                targetCells.size(), currentPreviewChannel);
                 } else {
                     targetCells = new ArrayList<>(hierarchy.getDetectionObjects());
-                    logger.info("Live Preview: Using {} total cells for channel: {}", 
+                    logger.info("Live Preview: Using {} total cells for channel: {}",
                                targetCells.size(), currentPreviewChannel);
                 }
                 
@@ -5861,8 +5865,12 @@ public class CellPhenotypeManagerPane {
         // 高性能执行：支持50,000,000+细胞，无限制，无弹窗
         List<qupath.lib.objects.PathObject> cellsToProcess = getCellsInSelectedROI(imageData);
         int actualCellCount = cellsToProcess.size();
-        
-        logger.info("高性能Load Classifier: 处理 {} 细胞 (ROI模式: {})", actualCellCount, useSelectedROI);
+
+        // v1.7.8: 修复 - 使用cellAnalysisComboBox的值，而不是未使用的useSelectedROI变量
+        String selectedMode = cellAnalysisComboBox != null ? cellAnalysisComboBox.getValue() : "全部细胞";
+        boolean isRoiMode = "当前选中细胞".equals(selectedMode);
+
+        logger.info("高性能Load Classifier: 处理 {} 细胞 (ROI模式: {})", actualCellCount, isRoiMode);
         
         // 直接执行，无细胞数量限制，无进度对话框
         logger.info("开始执行 executeLoadClassifierImmediate");
@@ -6430,7 +6438,11 @@ public class CellPhenotypeManagerPane {
      * Update ROI status label with current ROI information
      */
     private void updateROIStatusLabel(Label statusLabel) {
-        if (!useSelectedROI) {
+        // v1.7.8: 修复 - 使用cellAnalysisComboBox的值，而不是未使用的useSelectedROI变量
+        String selectedMode = cellAnalysisComboBox != null ? cellAnalysisComboBox.getValue() : "全部细胞";
+        boolean isRoiMode = "当前选中细胞".equals(selectedMode);
+
+        if (!isRoiMode) {
             statusLabel.setText("状态: 处理所有细胞");
             statusLabel.setStyle("-fx-text-fill: #666; -fx-font-style: italic;");
             return;
@@ -6511,22 +6523,6 @@ public class CellPhenotypeManagerPane {
         logger.info("Total cells in hierarchy: {}", allCells.size());
         logger.info("Selected ROIs: {}", selectedROIs.size());
 
-        // v1.7.8: 添加详细调试信息，排查细胞检测不一致问题
-        logger.info("v1.7.8 DEBUG: 选中对象总数: {}", selectedObjects.size());
-
-        // 统计选中对象类型
-        int roiCount = 0;
-        int cellCount = 0;
-        for (var obj : selectedObjects) {
-            if (obj.hasROI() && !obj.isDetection()) {
-                roiCount++;
-                logger.info("v1.7.8 DEBUG:   ROI对象: {}", obj.getName());
-            } else if (obj.isDetection()) {
-                cellCount++;
-            }
-        }
-        logger.info("v1.7.8 DEBUG: 其中ROI对象: {}个, 细胞对象: {}个", roiCount, cellCount);
-
         // Process each ROI
         for (int roiIdx = 0; roiIdx < selectedROIs.size(); roiIdx++) {
             var roiObject = selectedROIs.get(roiIdx);
@@ -6541,56 +6537,23 @@ public class CellPhenotypeManagerPane {
             // Check each cell using simple center-point method
             for (var cell : allCells) {
                 if (!cell.hasROI()) continue;
-
+                
                 var cellROI = cell.getROI();
                 if (cellROI == null) continue;
 
                 double cellCX = cellROI.getCentroidX();
                 double cellCY = cellROI.getCentroidY();
 
-                // Use simple contains check with tolerance
+                // Use simple contains check
                 try {
                     boolean inside = roi.contains(cellCX, cellCY);
-
-                    // v1.7.8: 容差机制 - 如果contains()失败，进行二次检查（浮点精度问题）
-                    if (!inside) {
-                        // 容差：0.5像素
-                        double tolerance = 0.5;
-
-                        // 检查细胞中心点是否在ROI边界附近
-                        double roiX = roi.getBoundsX() - tolerance;
-                        double roiY = roi.getBoundsY() - tolerance;
-                        double roiW = roi.getBoundsWidth() + 2 * tolerance;
-                        double roiH = roi.getBoundsHeight() + 2 * tolerance;
-
-                        // 如果在扩展边界内，进行更精确的检测
-                        if (cellCX >= roiX && cellCX <= roiX + roiW &&
-                            cellCY >= roiY && cellCY <= roiY + roiH) {
-
-                            // v1.7.8: 使用更精确的方法重新检测
-                            // 对于圆形/椭圆形ROI，手动计算距离
-                            double roiCenterX = roi.getBoundsX() + roi.getBoundsWidth() / 2.0;
-                            double roiCenterY = roi.getBoundsY() + roi.getBoundsHeight() / 2.0;
-                            double distance = Math.sqrt(
-                                Math.pow(cellCX - roiCenterX, 2) +
-                                Math.pow(cellCY - roiCenterY, 2)
-                            );
-
-                            double roiRadius = Math.min(roi.getBoundsWidth(), roi.getBoundsHeight()) / 2.0;
-
-                            // 允许0.5像素的容差
-                            if (distance <= roiRadius + tolerance) {
-                                inside = true;
-                            }
-                        }
-                    }
-
+                    
                     if (inside) {
                         cellsInROI.add(cell);
                         cellsInThisROI++;
-
+                        
                         if (cellsInThisROI <= 5) {
-                            logger.info("  Cell[{}]: center=({:.2f},{:.2f}) - IN ROI",
+                            logger.info("  Cell[{}]: center=({:.2f},{:.2f}) - IN ROI", 
                                        cellsInThisROI, cellCX, cellCY);
                         }
                     }
