@@ -6541,23 +6541,56 @@ public class CellPhenotypeManagerPane {
             // Check each cell using simple center-point method
             for (var cell : allCells) {
                 if (!cell.hasROI()) continue;
-                
+
                 var cellROI = cell.getROI();
                 if (cellROI == null) continue;
 
                 double cellCX = cellROI.getCentroidX();
                 double cellCY = cellROI.getCentroidY();
 
-                // Use simple contains check
+                // Use simple contains check with tolerance
                 try {
                     boolean inside = roi.contains(cellCX, cellCY);
-                    
+
+                    // v1.7.8: 容差机制 - 如果contains()失败，进行二次检查（浮点精度问题）
+                    if (!inside) {
+                        // 容差：0.5像素
+                        double tolerance = 0.5;
+
+                        // 检查细胞中心点是否在ROI边界附近
+                        double roiX = roi.getBoundsX() - tolerance;
+                        double roiY = roi.getBoundsY() - tolerance;
+                        double roiW = roi.getBoundsWidth() + 2 * tolerance;
+                        double roiH = roi.getBoundsHeight() + 2 * tolerance;
+
+                        // 如果在扩展边界内，进行更精确的检测
+                        if (cellCX >= roiX && cellCX <= roiX + roiW &&
+                            cellCY >= roiY && cellCY <= roiY + roiH) {
+
+                            // v1.7.8: 使用更精确的方法重新检测
+                            // 对于圆形/椭圆形ROI，手动计算距离
+                            double roiCenterX = roi.getBoundsX() + roi.getBoundsWidth() / 2.0;
+                            double roiCenterY = roi.getBoundsY() + roi.getBoundsHeight() / 2.0;
+                            double distance = Math.sqrt(
+                                Math.pow(cellCX - roiCenterX, 2) +
+                                Math.pow(cellCY - roiCenterY, 2)
+                            );
+
+                            double roiRadius = Math.min(roi.getBoundsWidth(), roi.getBoundsHeight()) / 2.0;
+
+                            // 允许0.5像素的容差
+                            if (distance <= roiRadius + tolerance) {
+                                inside = true;
+                            }
+                        }
+                    }
+
                     if (inside) {
                         cellsInROI.add(cell);
                         cellsInThisROI++;
-                        
+
                         if (cellsInThisROI <= 5) {
-                            logger.info("  Cell[{}]: center=({:.2f},{:.2f}) - IN ROI", 
+                            logger.info("  Cell[{}]: center=({:.2f},{:.2f}) - IN ROI",
                                        cellsInThisROI, cellCX, cellCY);
                         }
                     }
