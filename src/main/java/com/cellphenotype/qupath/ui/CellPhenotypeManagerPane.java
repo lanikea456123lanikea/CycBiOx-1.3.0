@@ -1719,7 +1719,11 @@ public class CellPhenotypeManagerPane {
         cellAnalysisBox.getChildren().addAll(cellSelectionRow, statisticsRow);
 
         // Update statistics when selection changes
-        cellAnalysisComboBox.setOnAction(e -> updateStatisticsDisplay(statisticsLabel));
+        cellAnalysisComboBox.setOnAction(e -> {
+            String selectedValue = cellAnalysisComboBox.getValue();
+            logger.info("v1.7.8 DEBUG: 用户切换下拉框选择 = '{}'", selectedValue);
+            updateStatisticsDisplay(statisticsLabel);
+        });
 
         // Initialize statistics display
         updateStatisticsDisplay(statisticsLabel);
@@ -2271,6 +2275,7 @@ public class CellPhenotypeManagerPane {
             ImageData<?> imageData = qupath.getImageData();
             if (imageData == null) {
                 statisticsLabel.setText("统计信息: 无图像数据");
+                logger.info("v1.7.8 DEBUG updateStatisticsDisplay: 无图像数据");
                 return;
             }
 
@@ -2278,14 +2283,30 @@ public class CellPhenotypeManagerPane {
 
             String selectedMode = cellAnalysisComboBox != null ? cellAnalysisComboBox.getValue() : "全部细胞";
 
+            logger.info("v1.7.8 DEBUG updateStatisticsDisplay: 用户选择模式 = '{}'", selectedMode);
+
+            // 获取所有选中对象
+            var selectedObjects = hierarchy.getSelectionModel().getSelectedObjects();
+            logger.info("v1.7.8 DEBUG updateStatisticsDisplay: 选中对象总数 = {}", selectedObjects.size());
+
+            // 统计不同类型
+            long detectionCount = selectedObjects.stream().filter(obj -> obj.isDetection()).count();
+            long annotationCount = selectedObjects.stream().filter(obj -> obj.hasROI() && !obj.isDetection()).count();
+            logger.info("v1.7.8 DEBUG updateStatisticsDisplay: 检测对象(细胞)={}, 注释对象(ROI)={}", detectionCount, annotationCount);
+
             if ("当前选中细胞".equals(selectedMode)) {
                 // v1.7.8: 使用与getCellsInSelectedROI相同的逻辑
                 List<qupath.lib.objects.PathObject> cellsToProcess = getCellsInSelectedROI(imageData);
                 if (cellsToProcess.isEmpty()) {
-                    var selectedObjects = hierarchy.getSelectionModel().getSelectedObjects();
-                    logger.info("v1.7.8 DEBUG updateStatisticsDisplay: 选中对象总数: {}", selectedObjects.size());
-                    statisticsLabel.setText("统计信息: 未选中任何对象，将分析全部 " + hierarchy.getDetectionObjects().size() + " 个细胞");
+                    if (detectionCount == 0 && annotationCount == 0) {
+                        logger.info("v1.7.8 DEBUG updateStatisticsDisplay: 用户选择了'当前选中细胞'但没有选中任何对象");
+                        statisticsLabel.setText("统计信息: 未选中任何对象，将分析全部 " + hierarchy.getDetectionObjects().size() + " 个细胞");
+                    } else {
+                        logger.info("v1.7.8 DEBUG updateStatisticsDisplay: 用户选择了'当前选中细胞'，处理 {} 个细胞", cellsToProcess.size());
+                        statisticsLabel.setText("统计信息: 已选中 " + cellsToProcess.size() + " 个细胞");
+                    }
                 } else {
+                    logger.info("v1.7.8 DEBUG updateStatisticsDisplay: 找到 {} 个细胞", cellsToProcess.size());
                     statisticsLabel.setText("统计信息: 已选中 " + cellsToProcess.size() + " 个细胞");
                 }
             } else {
@@ -2293,7 +2314,7 @@ public class CellPhenotypeManagerPane {
             }
         } catch (Exception e) {
             statisticsLabel.setText("统计信息: 获取统计信息失败");
-            logger.warn("Failed to update statistics display: {}", e.getMessage());
+            logger.warn("Failed to update statistics display: {}", e.getMessage(), e);
         }
     }
 
