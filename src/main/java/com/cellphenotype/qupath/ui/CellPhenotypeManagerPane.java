@@ -6585,7 +6585,7 @@ public class CellPhenotypeManagerPane {
             var roi = roiObject.getROI();
             if (roi == null) continue;
 
-            logger.info("v1.7.8: 正在检测ROI，bounds=({:.2f},{:.2f},{:.2f},{:.2f})",
+            logger.info("v1.7.8: 正在检测ROI，bounds=(%.2f,%.2f,%.2f,%.2f)",
                        roi.getBoundsX(), roi.getBoundsY(), roi.getBoundsWidth(), roi.getBoundsHeight());
 
             int cellsInThisROI = 0;
@@ -6618,7 +6618,7 @@ public class CellPhenotypeManagerPane {
 
                         // 只记录前3个边界细胞的调试信息
                         if (cellsInThisROI < 3) {
-                            logger.info("v1.7.8: 边界细胞 #{}: center=({:.2f},{:.2f}), distance={:.2f} <= roiRadius={:.2f} + 1.0 ✓",
+                            logger.info("v1.7.8: 边界细胞 #{}: center=(%.2f,%.2f), distance=%.2f <= roiRadius=%.2f + 1.0 ✓",
                                        cellsInThisROI + 1, cellCX, cellCY, distance, roiRadius);
                         }
                     }
@@ -6630,7 +6630,7 @@ public class CellPhenotypeManagerPane {
 
                     // 只记录前3个细胞的调试信息
                     if (cellsInThisROI <= 3) {
-                        logger.info("v1.7.8: 细胞 #{}: center=({:.2f},{:.2f}) - IN ROI",
+                        logger.info("v1.7.8: 细胞 #{}: center=(%.2f,%.2f) - IN ROI",
                                    cellsInThisROI, cellCX, cellCY);
                     }
                 }
