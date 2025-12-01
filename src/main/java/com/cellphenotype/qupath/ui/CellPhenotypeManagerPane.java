@@ -6511,6 +6511,22 @@ public class CellPhenotypeManagerPane {
         logger.info("Total cells in hierarchy: {}", allCells.size());
         logger.info("Selected ROIs: {}", selectedROIs.size());
 
+        // v1.7.8: 添加详细调试信息，排查细胞检测不一致问题
+        logger.info("v1.7.8 DEBUG: 选中对象总数: {}", selectedObjects.size());
+
+        // 统计选中对象类型
+        int roiCount = 0;
+        int cellCount = 0;
+        for (var obj : selectedObjects) {
+            if (obj.hasROI() && !obj.isDetection()) {
+                roiCount++;
+                logger.info("v1.7.8 DEBUG:   ROI对象: {}", obj.getName());
+            } else if (obj.isDetection()) {
+                cellCount++;
+            }
+        }
+        logger.info("v1.7.8 DEBUG: 其中ROI对象: {}个, 细胞对象: {}个", roiCount, cellCount);
+
         // Process each ROI
         for (int roiIdx = 0; roiIdx < selectedROIs.size(); roiIdx++) {
             var roiObject = selectedROIs.get(roiIdx);
