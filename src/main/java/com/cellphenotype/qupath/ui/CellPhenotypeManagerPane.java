@@ -6589,38 +6589,35 @@ public class CellPhenotypeManagerPane {
         }
 
         // 如果SelectionModel中没有细胞，说明只选中了ROI对象
-        // 这种情况下，QuPath显示的"46 objects"是其UI内部计算，
-        // 我们需要通过其他方式获取ROI内的细胞
+        // 这种情况下，我们需要读取ROI对象包含的细胞子对象
+        // 这是QuPath的原生数据结构：ROI可以有子对象（检测对象）
 
-        // 简化为：直接用QuPath原生的roi.contains()方法检测
-        // 但使用HashSet确保去重，避免重复计数
-        logger.info("v1.7.8: 使用QuPath原生方法检测ROI内细胞...");
+        logger.info("v1.7.8: 读取ROI对象包含的细胞...");
 
-        List<qupath.lib.objects.PathObject> allCells = new ArrayList<>(hierarchy.getDetectionObjects());
-        Set<qupath.lib.objects.PathObject> uniqueCells = new HashSet<>();
+        Set<qupath.lib.objects.PathObject> cellsInROIs = new HashSet<>();
 
+        // 遍历所有选中的ROI对象
         for (var roiObject : selectedROIs) {
-            var roi = roiObject.getROI();
-            if (roi == null) continue;
+            // 直接读取ROI对象的子对象
+            var roiChildren = roiObject.getChildObjects();
 
-            // 使用QuPath原生的contains方法检测每个细胞
-            for (var cell : allCells) {
-                if (!cell.hasROI()) continue;
-                var cellROI = cell.getROI();
-                if (cellROI == null) continue;
+            if (roiChildren != null && !roiChildren.isEmpty()) {
+                // 过滤出检测对象（细胞）
+                List<qupath.lib.objects.PathObject> cellsInRoi = roiChildren.stream()
+                    .filter(obj -> obj.isDetection())
+                    .collect(Collectors.toList());
 
-                double cellCX = cellROI.getCentroidX();
-                double cellCY = cellROI.getCentroidY();
+                logger.info("v1.7.8: ROI包含 {} 个细胞", cellsInRoi.size());
 
-                if (roi.contains(cellCX, cellCY)) {
-                    uniqueCells.add(cell);  // HashSet自动去重
-                }
+                // 添加到总集合中（自动去重）
+                cellsInROIs.addAll(cellsInRoi);
             }
         }
 
-        List<qupath.lib.objects.PathObject> cellsInRoi = new ArrayList<>(uniqueCells);
-        logger.info("v1.7.8: 通过QuPath原生方法检测到 {} 个细胞 (已去重)", cellsInRoi.size());
-        return cellsInRoi;
+        // 转换为List并返回
+        List<qupath.lib.objects.PathObject> cellsList = new ArrayList<>(cellsInROIs);
+        logger.info("v1.7.8: 总共读取到 {} 个ROI内细胞 (已去重)", cellsList.size());
+        return cellsList;
     }
 
     /**
