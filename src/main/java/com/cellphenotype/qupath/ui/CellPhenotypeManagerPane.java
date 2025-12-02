@@ -5601,40 +5601,39 @@ public class CellPhenotypeManagerPane {
                     
                     // ENHANCED: Get BOTH Classification and CellType data separately
 
-                    // 1. Get Classification from Load Object Classifier (stored in our mapping)
-                    String classification = getClassificationName(cellId);
-                    if (classification.isEmpty()) {
-                        classification = ""; // No Load Object Classifier result
+                    // 1. Get Classification from Load Object Classifier (stored in metadata)
+                    String classification = "";
+                    Object classificationObj = cell.getMetadata().get("classification");
+                    if (classificationObj != null) {
+                        classification = classificationObj.toString();
                     }
 
-                    // 2. Get CellType from Cell Classification (check measurements for CellType_Info)
+                    // 注意：Classification应该来自阈值分类的结果，保存在metadata中
+                    // 如果metadata中没有Classification，说明这个细胞没有经过阈值分类
+                    // 不应该尝试重新生成Classification，因为generateClassificationFromMarkers()
+                    // 会根据currentConfig中所有启用的通道生成，导致出现错误的marker
+                    // v1.7.8修复：移除generateClassificationFromMarkers()调用，避免错误生成Classification
+                    /*
+                    if (classification.isEmpty()) {
+                        classification = generateClassificationFromMarkers(cell);
+                    }
+                    */
+
+                    // 2. Get CellType from Cell Classification (check PathClass)
                     String cellType = "";
-                    var measurements = cell.getMeasurementList();
-                    if (measurements.containsKey("CellType_Info")) {
-                        double cellTypeHash = measurements.get("CellType_Info");
-                        if (cellTypeHash != 0.0) {
-                            // Try to reconstruct CellType from current configuration
+                    if (cell.getPathClass() != null) {
+                        cellType = cell.getPathClass().getName();
+                    }
+
+                    // 如果PathClass中没有CellType，尝试从measurements重建
+                    if (cellType.isEmpty()) {
+                        var measurements = cell.getMeasurementList();
+                        if (measurements.containsKey("CellType_Info")) {
                             cellType = generateCellTypeFromMeasurements(cell);
                         }
                     }
 
-                    // 3. Get CellType from PathClass - this is the authoritative source
-                    if (cellType.isEmpty() && cell.getPathClass() != null) {
-                        String pathClassName = cell.getPathClass().getName();
-
-                        // The PathClass name IS the CellType - it contains either:
-                        // 1. A defined phenotype name (e.g., "Helper T Cell", "B Cell")
-                        // 2. "undefined" for unclassified cells
-                        cellType = pathClassName;
-
-                        // Classification should be derived from marker states, not PathClass
-                        // If we don't have a separate classification, generate it from markers
-                        if (classification.isEmpty()) {
-                            classification = generateClassificationFromMarkers(cell);
-                        }
-                    }
-
-                    // 4. Final fallback: if no CellType found, it should be "undefined"
+                    // 3. 最终回退：如果没有CellType，设为"undefined"
                     if (cellType.isEmpty()) {
                         cellType = "undefined";
                     }
@@ -6594,6 +6593,9 @@ public class CellPhenotypeManagerPane {
 
         logger.info("v1.7.8: 读取ROI对象包含的细胞...");
 
+        // v1.7.8关键修复：使用cell ID匹配，确保返回的细胞对象与CellClassificationService使用的是同一个实例
+        // 问题：roi.getChildObjects()返回的可能是子对象视图，不是原始细胞对象
+        // 解决：通过ID匹配，从hierarchy.getDetectionObjects()中获取原始细胞对象
         Set<qupath.lib.objects.PathObject> cellsInROIs = new HashSet<>();
 
         // 遍历所有选中的ROI对象
@@ -6609,8 +6611,19 @@ public class CellPhenotypeManagerPane {
 
                 logger.info("v1.7.8: ROI包含 {} 个细胞", cellsInRoi.size());
 
-                // 添加到总集合中（自动去重）
-                cellsInROIs.addAll(cellsInRoi);
+                // 关键修复：通过ID匹配，从hierarchy中获取原始细胞对象
+                // 这样确保CellClassificationService处理的是原始细胞对象
+                for (var childCell : cellsInRoi) {
+                    if (childCell.getID() != null) {
+                        // 从hierarchy的所有细胞中查找匹配的ID
+                        for (var originalCell : hierarchy.getDetectionObjects()) {
+                            if (childCell.getID().equals(originalCell.getID())) {
+                                cellsInROIs.add(originalCell);  // 使用原始细胞对象
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -6624,6 +6637,7 @@ public class CellPhenotypeManagerPane {
      * v1.7.8: 设置QuPath SelectionModel监听器
      * 当用户在QuPath中选择对象时，自动更新插件统计信息
      */
+    @SuppressWarnings("unchecked")
     private void setupSelectionListener(ImageData<?> imageData, Label statisticsLabel) {
         try {
             var hierarchy = imageData.getHierarchy();
@@ -6927,7 +6941,6 @@ public class CellPhenotypeManagerPane {
 
             // Remove selection listener
             if (imageData != null && selectionListener != null) {
-                var hierarchy = imageData.getHierarchy();
                 // Selection listener cleanup - disabled for compatibility
                 selectionListener = null;
                 logger.info("Selection highlighting listener removed");

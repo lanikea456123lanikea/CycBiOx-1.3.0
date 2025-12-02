@@ -8,15 +8,19 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.cellphenotype.qupath.model.CellPhenotype;
 import com.cellphenotype.qupath.model.ThresholdConfig;
 import com.cellphenotype.qupath.utils.ColorUtils;
-import com.cellphenotype.qupath.utils.MeasurementUtils;
 
 import qupath.lib.images.ImageData;
 import qupath.lib.objects.PathObject;
@@ -26,6 +30,8 @@ import qupath.lib.objects.PathObject;
      */
 
 public class CellClassificationService {
+
+    private static final Logger logger = LoggerFactory.getLogger(CellClassificationService.class);
 
     /**
      * TODO: [数据] 分类结果数据类
@@ -144,20 +150,72 @@ public class CellClassificationService {
             System.out.println("    Marker states: " + pheno.getMarkerStates());
         }
 
-        detections.parallelStream().forEach(detection -> {
-            // Build 17: 使用getCellMarkerStates确保与Load Classifier一致
-            // 关键：这里使用的thresholdConfig必须与Load Classifier时使用的完全相同
-            Map<String, Boolean> markerStates = getCellMarkerStates(detection, thresholdConfig, measurementMapping);
+        // v1.7.8性能优化：对于小数据集使用串行处理，大数据集使用并行处理
+        // 选中细胞数量通常较少，使用串行处理更高效
+        if (detections.size() < 100) {
+            // 小数据集：串行处理，避免parallelStream的开销
+            for (PathObject detection : detections) {
+            // v1.7.8修复：使用字典形式（Map<String, Boolean>）进行比较，而不是字符串
+            // 用户要求："表型定义和classification匹配问题，出错，字典形式精确匹配"
+            Map<String, Boolean> markerStates = parseClassificationFromCell(detection, measurementMapping);
+
+            // v1.7.8: 添加详细调试日志查看匹配过程
+            logger.info("🔍 [MATCH-DEBUG] 细胞ID: {}, MarkerStates: {}",
+                       detection.getID(), markerStates);
 
             String cellType = classifyPhenotypeFromStates(markerStates, sortedPhenotypes);
+
+            // v1.7.8: 记录匹配结果
+            if (cellType != null && !"undefined".equals(cellType)) {
+                logger.info("✅ [MATCH-SUCCESS] 细胞ID: {} -> 表型: {}",
+                           detection.getID(), cellType);
+            } else {
+                logger.warn("❌ [MATCH-FAILED] 细胞ID: {} -> undefined (无匹配的表型)",
+                           detection.getID());
+                logger.warn("   可用表型: {}", sortedPhenotypes.stream()
+                           .map(p -> p.getName() + ":" + p.getMarkerStates())
+                           .collect(Collectors.toList()));
+            }
+
             if (cellType != null) {
                 results.put(detection, cellType);
                 // TODO: [存储] 设置 CellType_Info 测量值
                 detection.getMeasurementList().put("CellType_Info", (double)cellType.hashCode());
-            }
-        });
 
-        // 统计结果
+                // v1.7.8修复：同时设置PathClass，确保export时能正确读取cellType
+                // 这是关键的修复：export时依赖cell.getPathClass()获取cellType
+                // 如果不设置PathClass，export时会显示"undefined"
+                qupath.lib.objects.classes.PathClass pathClass = qupath.lib.objects.classes.PathClass.fromString(cellType);
+                detection.setPathClass(pathClass);
+            }
+            }
+        } else {
+            // 大数据集：并行处理，利用多核CPU
+            detections.parallelStream().forEach(detection -> {
+                // v1.7.8修复：使用字典形式（Map<String, Boolean>）进行比较，而不是字符串
+                Map<String, Boolean> markerStates = parseClassificationFromCell(detection, measurementMapping);
+
+                logger.info("🔍 [MATCH-DEBUG] 细胞ID: {}, MarkerStates: {}",
+                           detection.getID(), markerStates);
+
+                String cellType = classifyPhenotypeFromStates(markerStates, sortedPhenotypes);
+
+                if (cellType != null && !"undefined".equals(cellType)) {
+                    logger.info("✅ [MATCH-SUCCESS] 细胞ID: {} -> 表型: {}",
+                               detection.getID(), cellType);
+                } else {
+                    logger.warn("❌ [MATCH-FAILED] 细胞ID: {} -> undefined (无匹配的表型)",
+                               detection.getID());
+                }
+
+                if (cellType != null) {
+                    results.put(detection, cellType);
+                    detection.getMeasurementList().put("CellType_Info", (double)cellType.hashCode());
+                    qupath.lib.objects.classes.PathClass pathClass = qupath.lib.objects.classes.PathClass.fromString(cellType);
+                    detection.setPathClass(pathClass);
+                }
+            });
+        }
         Map<String, Long> stats = results.values().stream()
             .collect(java.util.stream.Collectors.groupingBy(
                 type -> type,
@@ -230,11 +288,17 @@ public class CellClassificationService {
 
             String measurementName = measurementMapping.get(channelName);
             if (measurementName == null) {
+                logger.warn("⚠️ [MEASUREMENT-MAP] 通道 '{}' 的测量名称未找到!", channelName);
                 continue;
             }
 
             double value = detection.getMeasurementList().get(measurementName);
             boolean isPositive = !Double.isNaN(value) && value > threshold.getThreshold();
+
+            // v1.7.8: 添加详细日志查看每个marker的计算过程 (改为INFO级别以便查看)
+            logger.info("🔬 [MEASUREMENT-DETAIL] 通道: {}, 测量值: {}, 阈值: {}, 结果: {}",
+                        channelName, value, threshold.getThreshold(), isPositive ? "阳性(+)" : "阴性(-)");
+
             markerStates.put(channelName, isPositive);
         }
 
@@ -318,5 +382,160 @@ public class CellClassificationService {
         }
 
         return mapping;
+    }
+
+    /**
+     * v1.7.8修复：从细胞中解析已保存的Classification结果
+     * 用户说："Classification中如果标签是CD3+，表明已经高于阈值，只需要后续和celltype自定义比对而已"
+     * 用户进一步说明：一个细胞只会有一个标识符
+     * - "CD3+" 代表的是：CD3+NK1.1-CD8-
+     * - "unclassified" 代表的是：全阴性（CD3-NK1.1-CD8-）
+     *
+     * @param detection 细胞对象
+     * @return marker名称到阳性/阴性的映射
+     */
+    /**
+     * v1.7.8: 直接从细胞对象获取Classification字符串
+     * @param detection 细胞对象
+     * @return Classification字符串
+     */
+    private static String getClassificationFromCell(PathObject detection) {
+        // 从metadata中读取classification
+        Object classificationObj = detection.getMetadata().get("classification");
+        String classification = classificationObj != null ? classificationObj.toString() : null;
+
+        // 从PathClass中读取classification（备用）
+        if (classification == null && detection.getPathClass() != null) {
+            classification = detection.getPathClass().getName();
+        }
+
+        // 如果没有classification，返回空字符串
+        if (classification == null || classification.trim().isEmpty()) {
+            logger.debug("🔍 [GET-CLASSIFICATION] 细胞ID: {} 没有classification信息", detection.getID());
+            return "";
+        }
+
+        logger.debug("🔍 [GET-CLASSIFICATION] 细胞ID: {}, Classification: {}", detection.getID(), classification);
+        return classification;
+    }
+
+    /**
+     * v1.7.8: 从Classification字符串进行表型分类
+     * 支持IGNORE标记的灵活匹配
+     * @param classification Classification字符串
+     * @param sortedPhenotypes 排序后的表型列表
+     * @return 表型名称
+     */
+    private static String classifyPhenotypeFromClassification(String classification,
+                                                             List<CellPhenotype> sortedPhenotypes) {
+        if (classification == null || classification.trim().isEmpty()) {
+            return "undefined";
+        }
+
+        // 遍历表型，查找匹配的
+        for (CellPhenotype phenotype : sortedPhenotypes) {
+            if (phenotype.matches(classification)) {
+                return phenotype.getName();
+            }
+        }
+
+        return "undefined";
+    }
+
+    /**
+     * v1.7.8: 单标识符逻辑
+     * 一个细胞只会有一个标识符，需要将这个标识符转换为所有marker的state
+     * 例如：
+     * - "CD3+" → {CD3=true, 所有其他marker=false}
+     * - "unclassified" → {所有marker=false}
+     *
+     * @param detection 细胞对象
+     * @param measurementMapping 测量值映射，用于获取所有可能的marker
+     * @return marker名称到阳性/阴性的映射
+     */
+    private static Map<String, Boolean> parseClassificationFromCell(PathObject detection, Map<String, String> measurementMapping) {
+        Map<String, Boolean> markerStates = new HashMap<>();
+
+        // v1.7.8: 添加详细日志分析classification问题
+        logger.info("🔍 [PARSE-START] 细胞ID: {}, 开始解析Classification", detection.getID());
+
+        // 从metadata中读取classification
+        Object classificationObj = detection.getMetadata().get("classification");
+        String classification = classificationObj != null ? classificationObj.toString() : null;
+
+        // 从PathClass中读取classification（备用）
+        if (classification == null && detection.getPathClass() != null) {
+            classification = detection.getPathClass().getName();
+        }
+
+        logger.info("   Classification字符串: {}", classification);
+
+        // 如果没有classification，返回空映射
+        if (classification == null || classification.trim().isEmpty()) {
+            logger.warn("⚠️  [PARSE-WARN] 细胞ID: {} 没有classification信息", detection.getID());
+            return markerStates;
+        }
+
+        // 从measurementMapping中获取所有可能的marker名称
+        Set<String> allMarkers = measurementMapping != null ? measurementMapping.keySet() : new HashSet<>();
+        logger.info("   所有可能的marker: {}", allMarkers);
+
+        // 特殊情况：unclassified 解析为所有marker都是false
+        if ("unclassified".equalsIgnoreCase(classification) || "Unclassified".equals(classification)) {
+            logger.info("   ✅ 匹配unclassified -> 全阴性");
+            for (String marker : allMarkers) {
+                markerStates.put(marker, false);
+                logger.debug("     {} = false", marker);
+            }
+            logger.info("🔍 [PARSE-RESULT] unclassified解析结果: {}", markerStates);
+            return markerStates;
+        }
+
+        // 检查是否是单标识符（不以_分隔，只有+或-）
+        if (!classification.contains("_") && (classification.endsWith("+") || classification.endsWith("-"))) {
+            // 单标识符：例如 "CD3+" 或 "CD8-"
+            String markerName = classification.substring(0, classification.length() - 1);
+            boolean isPositive = classification.endsWith("+");
+
+            logger.info("   单标识符解析：{} -> {}({})", classification, markerName, isPositive ? "阳性" : "阴性");
+
+            // 遍历所有marker
+            for (String marker : allMarkers) {
+                if (marker.equals(markerName)) {
+                    // 标识符对应的marker设为指定值
+                    markerStates.put(marker, isPositive);
+                    logger.info("     ✅ {} = {} (标识符)", marker, isPositive);
+                } else {
+                    // 其他marker设为false（阴性）
+                    markerStates.put(marker, false);
+                    logger.info("     ❌ {} = false (非标识符)", marker);
+                }
+            }
+        } else {
+            // v1.7.8: 兼容旧的多标识符格式（如"CD3+_CD4+_CD8-"）
+            logger.info("   多标识符解析: {}", classification);
+            String[] markers = classification.split("_");
+            for (String marker : markers) {
+                if (marker.isEmpty()) {
+                    continue;
+                }
+
+                // 检查标记结尾是+还是-
+                if (marker.endsWith("+")) {
+                    // 阳性：去掉+号
+                    String markerName = marker.substring(0, marker.length() - 1);
+                    markerStates.put(markerName, true);
+                    logger.info("   ✅ 解析到阳性: {} = true", markerName);
+                } else if (marker.endsWith("-")) {
+                    // 阴性：去掉-号
+                    String markerName = marker.substring(0, marker.length() - 1);
+                    markerStates.put(markerName, false);
+                    logger.info("   ✅ 解析到阴性: {} = false", markerName);
+                }
+            }
+        }
+
+        logger.info("🔍 [PARSE-RESULT] 最终解析结果: {}", markerStates);
+        return markerStates;
     }
 }
