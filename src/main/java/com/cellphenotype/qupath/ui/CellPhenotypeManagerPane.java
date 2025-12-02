@@ -6081,7 +6081,7 @@ public class CellPhenotypeManagerPane {
                         logger.debug("Cell {} classified as: {}", cell.getID(), classificationName);
                     } else {
                         // Unclassified情况
-                        PathClass unclassifiedPathClass = ColorUtils.createOrGetClassificationPathClass("Unclassified");
+                        PathClass unclassifiedPathClass = ColorUtils.createOrGetClassificationPathClass("unclassified");
                         cell.setPathClass(unclassifiedPathClass);
 
                         var clearMeasurements = cell.getMeasurementList();

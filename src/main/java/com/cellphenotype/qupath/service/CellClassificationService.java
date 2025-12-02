@@ -159,22 +159,11 @@ public class CellClassificationService {
             // 用户要求："表型定义和classification匹配问题，出错，字典形式精确匹配"
             Map<String, Boolean> markerStates = parseClassificationFromCell(detection, measurementMapping);
 
-            // v1.7.8: 添加详细调试日志查看匹配过程
-            logger.info("🔍 [MATCH-DEBUG] 细胞ID: {}, MarkerStates: {}",
-                       detection.getID(), markerStates);
-
             String cellType = classifyPhenotypeFromStates(markerStates, sortedPhenotypes);
 
-            // v1.7.8: 记录匹配结果
             if (cellType != null && !"undefined".equals(cellType)) {
-                logger.info("✅ [MATCH-SUCCESS] 细胞ID: {} -> 表型: {}",
+                logger.debug("✅ [MATCH-SUCCESS] 细胞ID: {} -> 表型: {}",
                            detection.getID(), cellType);
-            } else {
-                logger.warn("❌ [MATCH-FAILED] 细胞ID: {} -> undefined (无匹配的表型)",
-                           detection.getID());
-                logger.warn("   可用表型: {}", sortedPhenotypes.stream()
-                           .map(p -> p.getName() + ":" + p.getMarkerStates())
-                           .collect(Collectors.toList()));
             }
 
             if (cellType != null) {
@@ -395,54 +384,6 @@ public class CellClassificationService {
      * @return marker名称到阳性/阴性的映射
      */
     /**
-     * v1.7.8: 直接从细胞对象获取Classification字符串
-     * @param detection 细胞对象
-     * @return Classification字符串
-     */
-    private static String getClassificationFromCell(PathObject detection) {
-        // 从metadata中读取classification
-        Object classificationObj = detection.getMetadata().get("classification");
-        String classification = classificationObj != null ? classificationObj.toString() : null;
-
-        // 从PathClass中读取classification（备用）
-        if (classification == null && detection.getPathClass() != null) {
-            classification = detection.getPathClass().getName();
-        }
-
-        // 如果没有classification，返回空字符串
-        if (classification == null || classification.trim().isEmpty()) {
-            logger.debug("🔍 [GET-CLASSIFICATION] 细胞ID: {} 没有classification信息", detection.getID());
-            return "";
-        }
-
-        logger.debug("🔍 [GET-CLASSIFICATION] 细胞ID: {}, Classification: {}", detection.getID(), classification);
-        return classification;
-    }
-
-    /**
-     * v1.7.8: 从Classification字符串进行表型分类
-     * 支持IGNORE标记的灵活匹配
-     * @param classification Classification字符串
-     * @param sortedPhenotypes 排序后的表型列表
-     * @return 表型名称
-     */
-    private static String classifyPhenotypeFromClassification(String classification,
-                                                             List<CellPhenotype> sortedPhenotypes) {
-        if (classification == null || classification.trim().isEmpty()) {
-            return "undefined";
-        }
-
-        // 遍历表型，查找匹配的
-        for (CellPhenotype phenotype : sortedPhenotypes) {
-            if (phenotype.matches(classification)) {
-                return phenotype.getName();
-            }
-        }
-
-        return "undefined";
-    }
-
-    /**
      * v1.7.8: 单标识符逻辑
      * 一个细胞只会有一个标识符，需要将这个标识符转换为所有marker的state
      * 例如：
@@ -456,9 +397,6 @@ public class CellClassificationService {
     private static Map<String, Boolean> parseClassificationFromCell(PathObject detection, Map<String, String> measurementMapping) {
         Map<String, Boolean> markerStates = new HashMap<>();
 
-        // v1.7.8: 添加详细日志分析classification问题
-        logger.info("🔍 [PARSE-START] 细胞ID: {}, 开始解析Classification", detection.getID());
-
         // 从metadata中读取classification
         Object classificationObj = detection.getMetadata().get("classification");
         String classification = classificationObj != null ? classificationObj.toString() : null;
@@ -468,26 +406,19 @@ public class CellClassificationService {
             classification = detection.getPathClass().getName();
         }
 
-        logger.info("   Classification字符串: {}", classification);
-
         // 如果没有classification，返回空映射
         if (classification == null || classification.trim().isEmpty()) {
-            logger.warn("⚠️  [PARSE-WARN] 细胞ID: {} 没有classification信息", detection.getID());
             return markerStates;
         }
 
         // 从measurementMapping中获取所有可能的marker名称
         Set<String> allMarkers = measurementMapping != null ? measurementMapping.keySet() : new HashSet<>();
-        logger.info("   所有可能的marker: {}", allMarkers);
 
         // 特殊情况：unclassified 解析为所有marker都是false
-        if ("unclassified".equalsIgnoreCase(classification) || "Unclassified".equals(classification)) {
-            logger.info("   ✅ 匹配unclassified -> 全阴性");
+        if ("unclassified".equalsIgnoreCase(classification)) {
             for (String marker : allMarkers) {
                 markerStates.put(marker, false);
-                logger.debug("     {} = false", marker);
             }
-            logger.info("🔍 [PARSE-RESULT] unclassified解析结果: {}", markerStates);
             return markerStates;
         }
 
@@ -497,23 +428,18 @@ public class CellClassificationService {
             String markerName = classification.substring(0, classification.length() - 1);
             boolean isPositive = classification.endsWith("+");
 
-            logger.info("   单标识符解析：{} -> {}({})", classification, markerName, isPositive ? "阳性" : "阴性");
-
             // 遍历所有marker
             for (String marker : allMarkers) {
                 if (marker.equals(markerName)) {
                     // 标识符对应的marker设为指定值
                     markerStates.put(marker, isPositive);
-                    logger.info("     ✅ {} = {} (标识符)", marker, isPositive);
                 } else {
                     // 其他marker设为false（阴性）
                     markerStates.put(marker, false);
-                    logger.info("     ❌ {} = false (非标识符)", marker);
                 }
             }
         } else {
-            // v1.7.8: 兼容旧的多标识符格式（如"CD3+_CD4+_CD8-"）
-            logger.info("   多标识符解析: {}", classification);
+            // 兼容旧的多标识符格式（如"CD3+_CD4+_CD8-"）
             String[] markers = classification.split("_");
             for (String marker : markers) {
                 if (marker.isEmpty()) {
@@ -525,17 +451,14 @@ public class CellClassificationService {
                     // 阳性：去掉+号
                     String markerName = marker.substring(0, marker.length() - 1);
                     markerStates.put(markerName, true);
-                    logger.info("   ✅ 解析到阳性: {} = true", markerName);
                 } else if (marker.endsWith("-")) {
                     // 阴性：去掉-号
                     String markerName = marker.substring(0, marker.length() - 1);
                     markerStates.put(markerName, false);
-                    logger.info("   ✅ 解析到阴性: {} = false", markerName);
                 }
             }
         }
 
-        logger.info("🔍 [PARSE-RESULT] 最终解析结果: {}", markerStates);
         return markerStates;
     }
 }
