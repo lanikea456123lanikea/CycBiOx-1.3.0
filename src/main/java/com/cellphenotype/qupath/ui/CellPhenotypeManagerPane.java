@@ -6572,75 +6572,57 @@ public class CellPhenotypeManagerPane {
             return new ArrayList<>();
         }
 
-        // v1.7.8: 使用简单检测 - 统计ROI内的细胞数量
-        // 注意：QuPath显示的"46 objects"是其UI内部计算，不一定反映在SelectionModel中
-        // 我们使用标准的roi.contains()方法进行检测，并添加容差处理边界细胞
-        logger.info("v1.7.8: 统计ROI内的细胞数量...");
+        // v1.7.8: 直接读取QuPath原生SelectionModel
+        // 关键：QuPath显示"46 objects"说明已经选中了46个对象
+        // 这些对象（包括ROI内的细胞）应该已经在SelectionModel中
+
+        // 使用Set自动去重 - 避免同一个细胞被重复计数
+        Set<qupath.lib.objects.PathObject> cellsSet = new HashSet<>(selectedObjects);
+        List<qupath.lib.objects.PathObject> cellsInROI = cellsSet.stream()
+            .filter(obj -> obj.isDetection())
+            .collect(Collectors.toList());
+
+        // 如果SelectionModel中有细胞，直接返回
+        if (!cellsInROI.isEmpty()) {
+            logger.info("v1.7.8: 直接读取QuPath原生SelectionModel (已去重): {} 个细胞", cellsInROI.size());
+            return cellsInROI;
+        }
+
+        // 如果SelectionModel中没有细胞，说明只选中了ROI对象
+        // 这种情况下，QuPath显示的"46 objects"是其UI内部计算，
+        // 我们需要通过其他方式获取ROI内的细胞
+
+        // 尝试使用getObjectsList方法获取ROI内的所有对象
+        logger.info("v1.7.8: 尝试通过ROI获取内部细胞...");
 
         List<qupath.lib.objects.PathObject> allCells = new ArrayList<>(hierarchy.getDetectionObjects());
-        List<qupath.lib.objects.PathObject> cellsInROI = new ArrayList<>();
+        List<qupath.lib.objects.PathObject> cellsFound = new ArrayList<>();
 
-        // 遍历所有细胞，检查是否在ROI内
         for (var roiObject : selectedROIs) {
             var roi = roiObject.getROI();
             if (roi == null) continue;
 
-            logger.info("v1.7.8: 正在检测ROI，bounds=(%.2f,%.2f,%.2f,%.2f)",
-                       roi.getBoundsX(), roi.getBoundsY(), roi.getBoundsWidth(), roi.getBoundsHeight());
-
-            int cellsInThisROI = 0;
-
+            // 使用QuPath原生的contains方法检测
             for (var cell : allCells) {
                 if (!cell.hasROI()) continue;
-
                 var cellROI = cell.getROI();
                 if (cellROI == null) continue;
 
                 double cellCX = cellROI.getCentroidX();
                 double cellCY = cellROI.getCentroidY();
 
-                // v1.7.8: 添加容差检测，处理边界细胞
-                boolean inside = roi.contains(cellCX, cellCY);
-
-                // 如果roi.contains()返回false，尝试容差检测
-                if (!inside) {
-                    // 计算细胞中心到ROI中心的距离
-                    double roiCenterX = roi.getBoundsX() + roi.getBoundsWidth() / 2;
-                    double roiCenterY = roi.getBoundsY() + roi.getBoundsHeight() / 2;
-                    double distance = Math.sqrt(Math.pow(cellCX - roiCenterX, 2) + Math.pow(cellCY - roiCenterY, 2));
-
-                    // ROI的"半径"（使用较小边长的一半）
-                    double roiRadius = Math.min(roi.getBoundsWidth(), roi.getBoundsHeight()) / 2;
-
-                    // 允许1像素的容差（处理浮点精度问题）
-                    if (distance <= roiRadius + 1.0) {
-                        inside = true;
-
-                        // 只记录前3个边界细胞的调试信息
-                        if (cellsInThisROI < 3) {
-                            logger.info("v1.7.8: 边界细胞 #{}: center=(%.2f,%.2f), distance=%.2f <= roiRadius=%.2f + 1.0 ✓",
-                                       cellsInThisROI + 1, cellCX, cellCY, distance, roiRadius);
-                        }
-                    }
-                }
-
-                if (inside) {
-                    cellsInROI.add(cell);
-                    cellsInThisROI++;
-
-                    // 只记录前3个细胞的调试信息
-                    if (cellsInThisROI <= 3) {
-                        logger.info("v1.7.8: 细胞 #{}: center=(%.2f,%.2f) - IN ROI",
-                                   cellsInThisROI, cellCX, cellCY);
-                    }
+                if (roi.contains(cellCX, cellCY)) {
+                    cellsFound.add(cell);
                 }
             }
-
-            logger.info("v1.7.8: ROI内共检测到 {} 个细胞", cellsInThisROI);
         }
 
-        logger.info("v1.7.8: 检测到 {} 个细胞在ROI内 (含边界容差)", cellsInROI.size());
-        return cellsInROI;
+        // 去重
+        Set<qupath.lib.objects.PathObject> uniqueCells = new HashSet<>(cellsFound);
+        List<qupath.lib.objects.PathObject> uniqueCellsList = new ArrayList<>(uniqueCells);
+
+        logger.info("v1.7.8: 通过ROI检测到 {} 个细胞 (已去重)", uniqueCellsList.size());
+        return uniqueCellsList;
     }
 
     /**
