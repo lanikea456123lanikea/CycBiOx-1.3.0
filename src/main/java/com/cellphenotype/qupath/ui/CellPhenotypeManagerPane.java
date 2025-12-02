@@ -6592,17 +6592,18 @@ public class CellPhenotypeManagerPane {
         // 这种情况下，QuPath显示的"46 objects"是其UI内部计算，
         // 我们需要通过其他方式获取ROI内的细胞
 
-        // 尝试使用getObjectsList方法获取ROI内的所有对象
-        logger.info("v1.7.8: 尝试通过ROI获取内部细胞...");
+        // 简化为：直接用QuPath原生的roi.contains()方法检测
+        // 但使用HashSet确保去重，避免重复计数
+        logger.info("v1.7.8: 使用QuPath原生方法检测ROI内细胞...");
 
         List<qupath.lib.objects.PathObject> allCells = new ArrayList<>(hierarchy.getDetectionObjects());
-        List<qupath.lib.objects.PathObject> cellsFound = new ArrayList<>();
+        Set<qupath.lib.objects.PathObject> uniqueCells = new HashSet<>();
 
         for (var roiObject : selectedROIs) {
             var roi = roiObject.getROI();
             if (roi == null) continue;
 
-            // 使用QuPath原生的contains方法检测
+            // 使用QuPath原生的contains方法检测每个细胞
             for (var cell : allCells) {
                 if (!cell.hasROI()) continue;
                 var cellROI = cell.getROI();
@@ -6612,17 +6613,14 @@ public class CellPhenotypeManagerPane {
                 double cellCY = cellROI.getCentroidY();
 
                 if (roi.contains(cellCX, cellCY)) {
-                    cellsFound.add(cell);
+                    uniqueCells.add(cell);  // HashSet自动去重
                 }
             }
         }
 
-        // 去重
-        Set<qupath.lib.objects.PathObject> uniqueCells = new HashSet<>(cellsFound);
-        List<qupath.lib.objects.PathObject> uniqueCellsList = new ArrayList<>(uniqueCells);
-
-        logger.info("v1.7.8: 通过ROI检测到 {} 个细胞 (已去重)", uniqueCellsList.size());
-        return uniqueCellsList;
+        List<qupath.lib.objects.PathObject> cellsInRoi = new ArrayList<>(uniqueCells);
+        logger.info("v1.7.8: 通过QuPath原生方法检测到 {} 个细胞 (已去重)", cellsInRoi.size());
+        return cellsInRoi;
     }
 
     /**
